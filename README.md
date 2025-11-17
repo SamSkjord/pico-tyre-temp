@@ -312,13 +312,13 @@ Edit `main.c`:
 
 ## Future Improvements
 
-- [ ] I2C peripheral/slave mode (second I2C channel)
+- [ ] I2C peripheral/slave mode (second I2C channel for downstream devices)
 - [ ] Multi-core processing (sensor on core 0, algorithm on core 1)
-- [ ] Assembly optimizations for hot paths
-- [ ] DMA for I2C transfers
-- [ ] Target: 10+ Hz
+- [ ] Optimize `MLX90640_CalculateTo()` - the 61.5ms bottleneck
+- [ ] Fixed-point math or SIMD for temperature calculations
+- [ ] Target: Approach sensor's 16Hz limit (62.5ms/frame)
 
-Current C version achieves the **4-10 Hz goal** reliably at ~7 Hz.
+Current C version achieves **11.5 Hz** - exceeding the original 4-10 Hz goal! 🎯
 
 ## License
 
