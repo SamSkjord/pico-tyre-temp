@@ -19,6 +19,7 @@
 
 #include "thermal_algorithm.h"
 #include "communication.h"
+#include "i2c_slave.h"
 
 #define MLX90640_ADDR 0x33
 #define COMPACT_OUTPUT 1  // 1 for CSV, 0 for JSON
@@ -125,12 +126,18 @@ int main(void) {
     ThermalConfig config;
     thermal_algorithm_init(&config);
 
+    // Initialize I2C slave mode (GP26=SDA, GP27=SCL, address 0x08)
+    printf("Initializing I2C slave mode at address 0x08...\n");
+    i2c_slave_init(I2C_SLAVE_DEFAULT_ADDR);
+    printf("I2C slave mode enabled on GP26/GP27\n");
+
     FrameData result;
     memset(&result, 0, sizeof(result));
 
     printf("========================================\n");
     printf("Starting thermal sensing loop...\n");
     printf("Output: %s\n", COMPACT_OUTPUT ? "Compact CSV" : "Full JSON");
+    printf("I2C Slave: 0x08 (GP26=SDA, GP27=SCL)\n");
     printf("========================================\n\n");
 
     gpio_put(LED_PIN, 0);  // LED off - ready
@@ -187,15 +194,17 @@ int main(void) {
             temp_profile[col] = sum / 24.0f;
         }
 
-        // Output results
-        #if COMPACT_OUTPUT
-            send_serial_compact(&result, fps);
-        #else
-            send_serial_json(&result, fps, temp_profile);
-        #endif
+        // Update I2C slave registers
+        i2c_slave_update(&result, fps, mlx_frame);
 
-        // Update I2C registers (if using I2C peripheral)
-        update_i2c_registers(&result);
+        // Output results (conditional based on output mode)
+        if (i2c_slave_output_enabled(OUTPUT_MODE_USB_SERIAL)) {
+            #if COMPACT_OUTPUT
+                send_serial_compact(&result, fps);
+            #else
+                send_serial_json(&result, fps, temp_profile);
+            #endif
+        }
 
         uint64_t t_end = time_us_64();
 

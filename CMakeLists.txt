@@ -30,12 +30,14 @@ add_executable(thermal_tyre_pico
     main.c
     thermal_algorithm.c
     communication.c
+    i2c_slave.c
 )
 
 target_link_libraries(thermal_tyre_pico
     mlx90640_driver
     pico_stdlib
     hardware_i2c
+    hardware_irq
     hardware_uart
     pico_multicore
 )
