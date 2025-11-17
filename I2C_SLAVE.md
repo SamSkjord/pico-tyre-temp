@@ -34,7 +34,10 @@ The Pico supports multiple output modes (configurable via register `0x01`):
 | `0x00` | I2C_ADDRESS | uint8 | I2C slave address (7-bit, requires restart) |
 | `0x01` | OUTPUT_MODE | uint8 | Output mode select (see above) |
 | `0x02` | FRAME_RATE | uint8 | Target frame rate (reserved for future) |
-| `0x03-0x0F` | RESERVED | - | Reserved for future use |
+| `0x03` | FALLBACK_MODE | uint8 | Fallback mode: 0=zero temps when no tyre, 1=copy centre temp |
+| `0x04` | EMISSIVITY | uint8 | Emissivity × 100 (e.g., 95 = 0.95), default 95 |
+| `0x05` | RAW_MODE | uint8 | Raw mode: 0=tyre algorithm, 1=16-channel raw data only |
+| `0x06-0x0F` | RESERVED | - | Reserved for future use |
 
 ### Status Registers (0x10-0x1F) - Read Only
 
@@ -69,7 +72,20 @@ All temperatures stored as **int16 in tenths of degrees Celsius** (little-endian
 
 Example: `0x0119` = 281 tenths = 28.1°C
 
-### Full Frame Access (0x40+) - Read Only
+### Raw 16-Channel Data (0x30-0x4F) - Read Only
+
+Available when `RAW_MODE=1`. Each channel averages 2 columns × 24 rows from the 32×24 sensor.
+
+| Address | Name | Description |
+|---------|------|-------------|
+| `0x30-0x31` | CHANNEL_0 | Channel 0 (leftmost) int16 tenths °C |
+| `0x32-0x33` | CHANNEL_1 | Channel 1 int16 tenths °C |
+| ... | ... | Channels 2-14 follow sequentially |
+| `0x4E-0x4F` | CHANNEL_15 | Channel 15 (rightmost) int16 tenths °C |
+
+**Access pattern:** `REG_BASE = 0x30 + (channel_num × 2)`
+
+### Full Frame Access (0x50+) - Read Only
 
 | Address | Name | Description |
 |---------|------|-------------|
@@ -155,6 +171,71 @@ bus.write_byte_data(PICO_ADDR, 0x01, 0x01)  # OUTPUT_MODE_I2C_SLAVE
 
 # Enable both USB and I2C
 bus.write_byte_data(PICO_ADDR, 0x01, 0xFF)  # OUTPUT_MODE_ALL
+```
+
+### Example 6: Enable Fallback Mode
+
+```python
+# Enable fallback mode - when no tyre detected, copy centre temp to left/right
+bus.write_byte_data(PICO_ADDR, 0x03, 0x01)  # FALLBACK_MODE = 1
+
+# Now read temps - left/right will match centre when no tyre detected
+data = bus.read_i2c_block_data(PICO_ADDR, 0x20, 6)
+left = ((data[1] << 8) | data[0]) / 10.0
+centre = ((data[3] << 8) | data[2]) / 10.0
+right = ((data[5] << 8) | data[4]) / 10.0
+
+# Disable fallback mode - left/right will be 0.0 when no tyre
+bus.write_byte_data(PICO_ADDR, 0x03, 0x00)  # FALLBACK_MODE = 0
+```
+
+### Example 7: Adjust Emissivity
+
+```python
+# Read current emissivity
+emiss = bus.read_byte_data(PICO_ADDR, 0x04)
+print(f"Current emissivity: {emiss / 100.0}")  # Default: 0.95
+
+# Adjust for different tyre compound
+# Soft compound tyres: 0.93
+bus.write_byte_data(PICO_ADDR, 0x04, 93)
+
+# Medium compound tyres: 0.95 (default)
+bus.write_byte_data(PICO_ADDR, 0x04, 95)
+
+# Hard compound tyres: 0.97
+bus.write_byte_data(PICO_ADDR, 0x04, 97)
+
+# Wet weather tyres: 0.98
+bus.write_byte_data(PICO_ADDR, 0x04, 98)
+```
+
+### Example 8: Raw 16-Channel Mode
+
+```python
+# Enable raw mode - skips tyre detection algorithm
+bus.write_byte_data(PICO_ADDR, 0x05, 0x01)  # RAW_MODE = 1
+
+# Read all 16 channels (32 bytes)
+data = bus.read_i2c_block_data(PICO_ADDR, 0x30, 32)
+
+# Parse into 16 temperature values
+channels = []
+for i in range(16):
+    low = data[i * 2]
+    high = data[i * 2 + 1]
+    temp_tenths = low | (high << 8)
+    if temp_tenths > 32767:
+        temp_tenths -= 65536  # Handle signed int16
+    temp_celsius = temp_tenths / 10.0
+    channels.append(temp_celsius)
+
+print("16-Channel Temperature Profile:")
+for i, temp in enumerate(channels):
+    print(f"  Channel {i:2d}: {temp:6.1f}°C")
+
+# Disable raw mode - return to tyre algorithm
+bus.write_byte_data(PICO_ADDR, 0x05, 0x00)  # RAW_MODE = 0
 ```
 
 ## Arduino Example
