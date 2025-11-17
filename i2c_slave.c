@@ -6,6 +6,7 @@
 #include "i2c_slave.h"
 #include "hardware/i2c.h"
 #include "hardware/irq.h"
+#include "hardware/gpio.h"
 #include <string.h>
 #include <math.h>
 
@@ -122,6 +123,9 @@ void i2c_slave_init(uint8_t address) {
     // Set default config
     register_map[REG_I2C_ADDRESS] = address;
     register_map[REG_OUTPUT_MODE] = OUTPUT_MODE_USB_SERIAL;
+    register_map[REG_FALLBACK_MODE] = 0;  // Default: return 0 when no tyre detected
+    register_map[REG_EMISSIVITY] = 95;    // Default: 0.95 emissivity
+    register_map[REG_RAW_MODE] = 0;       // Default: tyre algorithm enabled
 
     // Initialize I2C1 pins
     gpio_set_function(I2C_SLAVE_SDA_PIN, GPIO_FUNC_I2C);
@@ -170,6 +174,15 @@ void i2c_slave_update(const FrameData *data, float fps, const float *frame) {
     int16_t right_avg = temp_to_int16_tenths(data->right.avg);
     int16_t lat_grad = temp_to_int16_tenths(data->lateral_gradient);
 
+    // Check fallback mode - if no tyre detected and fallback enabled, copy centre temps
+    if (!data->detection.detected && register_map[REG_FALLBACK_MODE] == 1) {
+        left_med = centre_med;
+        right_med = centre_med;
+        left_avg = centre_avg;
+        right_avg = centre_avg;
+        lat_grad = 0;  // No gradient when copying centre temp
+    }
+
     // Pack into registers (little-endian)
     register_map[REG_LEFT_MEDIAN_L] = left_med & 0xFF;
     register_map[REG_LEFT_MEDIAN_H] = (left_med >> 8) & 0xFF;
@@ -187,6 +200,30 @@ void i2c_slave_update(const FrameData *data, float fps, const float *frame) {
 
     register_map[REG_LATERAL_GRADIENT_L] = lat_grad & 0xFF;
     register_map[REG_LATERAL_GRADIENT_H] = (lat_grad >> 8) & 0xFF;
+
+    // Calculate 16 raw channels if frame data is available
+    // Each channel averages 2 columns × 4 middle rows = 8 pixels
+    if (frame) {
+        for (int ch = 0; ch < 16; ch++) {
+            float sum = 0.0f;
+            int col_start = ch * 2;  // Each channel covers 2 columns
+
+            // Average 2 columns × 4 middle rows (rows 10-13)
+            for (int row = 10; row < 14; row++) {
+                for (int col = col_start; col < col_start + 2; col++) {
+                    sum += frame[row * 32 + col];
+                }
+            }
+
+            float avg = sum / 8.0f;  // 2 cols × 4 rows
+            int16_t temp = temp_to_int16_tenths(avg);
+
+            // Pack into registers at 0x30 + (ch * 2)
+            uint8_t reg_base = REG_RAW_CH0_L + (ch * 2);
+            register_map[reg_base] = temp & 0xFF;
+            register_map[reg_base + 1] = (temp >> 8) & 0xFF;
+        }
+    }
 }
 
 OutputMode i2c_slave_get_output_mode(void) {
@@ -201,4 +238,15 @@ void i2c_slave_set_output_mode(OutputMode mode) {
 bool i2c_slave_output_enabled(OutputMode mode) {
     if (state.output_mode == OUTPUT_MODE_ALL) return true;
     return (state.output_mode == mode);
+}
+
+float i2c_slave_get_emissivity(void) {
+    // Convert uint8 (0-100) to float (0.0-1.0)
+    uint8_t emiss = register_map[REG_EMISSIVITY];
+    if (emiss > 100) emiss = 100;  // Clamp to max 1.0
+    return emiss / 100.0f;
+}
+
+bool i2c_slave_get_raw_mode(void) {
+    return (register_map[REG_RAW_MODE] != 0);
 }

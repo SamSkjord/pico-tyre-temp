@@ -168,14 +168,20 @@ int main(void) {
         }
 
         // Calculate temperatures from raw data
-        float emissivity = 0.95f;
+        float emissivity = i2c_slave_get_emissivity();
         float tr = 23.15f;  // Reflected temperature
         MLX90640_CalculateTo(mlx_frame_raw, &mlx_params, emissivity, tr, mlx_frame);
 
         uint64_t t_calc = time_us_64();
 
-        // Process with thermal algorithm
-        thermal_algorithm_process(mlx_frame, &result, &config);
+        // Process with thermal algorithm (skip if raw mode enabled)
+        if (!i2c_slave_get_raw_mode()) {
+            thermal_algorithm_process(mlx_frame, &result, &config);
+        } else {
+            // Raw mode - clear result data
+            memset(&result, 0, sizeof(result));
+            result.frame_number = total_frames;
+        }
 
         uint64_t t_algo = time_us_64();
 

@@ -74,7 +74,7 @@ Example: `0x0119` = 281 tenths = 28.1°C
 
 ### Raw 16-Channel Data (0x30-0x4F) - Read Only
 
-Available when `RAW_MODE=1`. Each channel averages 2 columns × 24 rows from the 32×24 sensor.
+Available when `RAW_MODE=1`. Each channel averages 2 columns × 4 middle rows (rows 10-13) from the 32×24 sensor.
 
 | Address | Name | Description |
 |---------|------|-------------|
@@ -294,10 +294,76 @@ void loop() {
 - Verify OUTPUT_MODE includes I2C (register 0x01)
 - Check FRAME_NUMBER to see if frames are incrementing
 
+**Frame counter overflow:**
+- I2C registers store 16-bit counter (0-65,535)
+- Overflows after ~1.6 hours at 11.5 fps
+- Wraps cleanly: 65535 → 0
+- Detect wraps by checking for frame number decrease
+- Internal counter is 32-bit (10+ years before overflow)
+
+**MLX90640 sensor dropout:**
+- Firmware detects and recovers automatically
+- Prints error message (if USB serial enabled)
+- Retries every 100ms indefinitely
+- I2C registers retain last valid data during dropout
+- Resumes normal operation when sensor reconnects
+- No restart required
+
 ## CAN Bus (Future)
 
 CAN bus support will be added in a future firmware update. Set `OUTPUT_MODE` to `0x02` (reserved for now).
 
 ## Performance
 
-I2C slave mode uses interrupts and doesn't affect the main 11.5 fps performance. Typical I2C read latency: <1ms.
+### Frame Rate Breakdown
+
+Typical performance at 11.5 fps (87ms total per frame):
+
+| Component | Time | Notes |
+|-----------|------|-------|
+| Sensor read | ~125ms | Hardware limited (MLX90640 at 16Hz refresh) |
+| Temperature calc | ~60ms | MLX90640_CalculateTo (floating point math) |
+| Tyre algorithm | ~5ms | Detection, zone calculations |
+| **USB serial output** | **3-7ms** | printf, fflush - *removable overhead* |
+| I2C slave update | <1ms | Interrupt-driven, non-blocking |
+
+**Total bottleneck:** Sensor read + calculation = ~185ms minimum
+
+### Performance Optimization
+
+**To maximize performance, disable USB serial output:**
+
+```python
+# Disable USB serial - I2C only mode
+bus.write_byte_data(PICO_ADDR, 0x01, 0x01)  # OUTPUT_MODE_I2C_SLAVE
+```
+
+**Expected gains:**
+- Remove ~3-7ms serial overhead per frame
+- Remove debug timing printf (~1-2ms every 10 frames)
+- Performance: **11.5 fps → 11.8 fps** (minor but free)
+
+**When to use I2C-only mode:**
+- Production deployment with embedded controller
+- Maximum performance needed
+- No need for USB debugging/visualization
+- Running on battery (lower USB power consumption)
+
+**When to use USB serial:**
+- Development and debugging
+- Visualization with Python visualizer
+- Data logging to PC
+- Monitoring tyre detection in real-time
+
+**Raw mode performance:**
+- Enabling `RAW_MODE=1` skips tyre detection algorithm
+- Saves ~5ms per frame (algorithm time)
+- Best for custom processing or alignment/debugging
+- Performance: **11.5 fps → 11.6 fps**
+
+### I2C Performance
+
+- I2C slave uses interrupts - zero impact on main loop
+- Typical I2C read latency: <1ms
+- Register updates: <0.1ms per frame
+- Supports 100kHz and 400kHz I2C bus speeds

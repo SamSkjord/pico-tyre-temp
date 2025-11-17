@@ -32,9 +32,9 @@ typedef enum {
 #define REG_I2C_ADDRESS         0x00  // I2C slave address (7-bit)
 #define REG_OUTPUT_MODE         0x01  // Output mode select
 #define REG_FRAME_RATE          0x02  // Target frame rate (future)
-#define REG_RESERVED_03         0x03
-#define REG_RESERVED_04         0x04
-#define REG_RESERVED_05         0x05
+#define REG_FALLBACK_MODE       0x03  // Fallback mode: 0=zero temps when no tyre, 1=copy centre temp
+#define REG_EMISSIVITY          0x04  // Emissivity × 100 (e.g., 95 = 0.95), default 95
+#define REG_RAW_MODE            0x05  // Raw mode: 0=tyre algorithm, 1=16-channel raw data
 #define REG_RESERVED_06         0x06
 #define REG_RESERVED_07         0x07
 #define REG_RESERVED_08         0x08
@@ -81,10 +81,15 @@ typedef enum {
 #define REG_RIGHT_AVG_H         0x2B  // Right avg temp (high byte)
 #define REG_LATERAL_GRADIENT_L  0x2C  // Lateral gradient (low byte)
 #define REG_LATERAL_GRADIENT_H  0x2D  // Lateral gradient (high byte)
-#define REG_RESERVED_2E         0x2E
-#define REG_RESERVED_2F         0x2F
 
-// FULL FRAME ACCESS (0x40+) - Read Only
+// RAW 16-CHANNEL DATA (0x30-0x4F) - Read Only, active when RAW_MODE=1
+// 16 channels × 2 bytes (int16 tenths) = 32 bytes
+#define REG_RAW_CH0_L           0x30  // Channel 0 (leftmost) low byte
+#define REG_RAW_CH0_H           0x31  // Channel 0 high byte
+// Channels 1-15 follow sequentially at 0x32-0x4F
+// Access via: 0x30 + (channel * 2) for low byte
+
+// FULL FRAME ACCESS (0x50+) - Read Only
 #define REG_FRAME_ACCESS        0x40  // Read pointer for full frame data
 #define REG_FRAME_DATA_START    0x41  // Start of streaming frame data
 
@@ -117,5 +122,11 @@ void i2c_slave_set_output_mode(OutputMode mode);
 
 // Check if output mode is enabled
 bool i2c_slave_output_enabled(OutputMode mode);
+
+// Get emissivity value (as float 0.0-1.0)
+float i2c_slave_get_emissivity(void);
+
+// Get raw mode setting
+bool i2c_slave_get_raw_mode(void);
 
 #endif // I2C_SLAVE_H
