@@ -9,9 +9,9 @@ Real-time thermal imaging at 11.5 fps with automatic tyre detection and live vis
 | Version | Frame Rate | Frame Time | Speedup |
 |---------|-----------|------------|---------|
 | CircuitPython | 1.5 fps | 640ms | Baseline |
-| **C Version** | **11.5 fps** | **87ms** | **7.6x faster** ✅ |
+| **C Version** | **11.5 fps** | **87ms** | **7.6x faster** |
 
-**Target exceeded:** 11.5 Hz achieved! 🎯
+**Target exceeded:** 11.5 Hz achieved!
 
 ## Why C?
 
@@ -325,13 +325,13 @@ Edit `main.c`:
 
 ## Future Improvements
 
-- [x] I2C peripheral/slave mode (✅ implemented on GP26/GP27 at address 0x08)
+- [x] I2C peripheral/slave mode (implemented on GP26/GP27 at address 0x08)
 - [ ] Multi-core processing (sensor on core 0, algorithm on core 1)
 - [ ] Optimize `MLX90640_CalculateTo()` - the 61.5ms bottleneck
 - [ ] Fixed-point math or SIMD for temperature calculations
 - [ ] Target: Approach sensor's 16Hz limit (62.5ms/frame)
 
-Current C version achieves **11.5 Hz** - exceeding the original 4-10 Hz goal! 🎯
+Current C version achieves **11.5 Hz** - exceeding the original 4-10 Hz goal!
 
 ## License
 
