@@ -56,7 +56,8 @@ The Pico supports multiple output modes (configurable via register `0x01`):
 
 ### Temperature Data Registers (0x20-0x3F) - Read Only
 
-All temperatures stored as **int16 in tenths of degrees Celsius** (little-endian).
+All temperatures stored as **signed int16 in tenths of degrees Celsius** (little-endian).
+**Range:** -3276.8°C to +3276.7°C (values -32768 to +32767)
 
 | Address | Name | Type | Description |
 |---------|------|------|-------------|
@@ -85,15 +86,15 @@ Available when `RAW_MODE=1`. Each channel averages 2 columns × 4 middle rows (r
 
 **Access pattern:** `REG_BASE = 0x30 + (channel_num × 2)`
 
-### Full Frame Access (0x50+) - Read Only
+### Full Frame Access (0x40+) - Read Only
 
 | Address | Name | Description |
 |---------|------|-------------|
 | `0x40` | FRAME_ACCESS | Frame read pointer (reserved) |
 | `0x41` | FRAME_DATA_START | Streaming full frame data |
 
-Reading from `0x41` returns full 768-pixel frame as int16 tenths (1536 bytes total).
-Auto-increments through frame data with each read.
+Reading from `0x41` returns full 768-pixel frame as **signed int16 tenths** (1536 bytes total: 768 pixels × 2 bytes).
+Auto-increments through frame data with each read. Wraps to start after reading all 1536 bytes.
 
 ### Command Register (0xFF) - Write Only
 
@@ -109,13 +110,16 @@ Auto-increments through frame data with each read.
 
 ```python
 import smbus
+import struct
 
 bus = smbus.SMBus(1)  # I2C bus 1
 PICO_ADDR = 0x08
 
 # Read centre median temperature
 data = bus.read_i2c_block_data(PICO_ADDR, 0x22, 2)
-temp_tenths = (data[1] << 8) | data[0]  # Little-endian
+
+# Convert to signed int16 (little-endian)
+temp_tenths = struct.unpack('<h', bytes(data))[0]
 temp_celsius = temp_tenths / 10.0
 print(f"Centre median: {temp_celsius}°C")
 ```
@@ -137,12 +141,17 @@ else:
 ### Example 3: Read All Zone Medians
 
 ```python
+import struct
+
 # Read left, centre, right medians in one transaction
 data = bus.read_i2c_block_data(PICO_ADDR, 0x20, 6)
 
-left = ((data[1] << 8) | data[0]) / 10.0
-centre = ((data[3] << 8) | data[2]) / 10.0
-right = ((data[5] << 8) | data[4]) / 10.0
+# Unpack three signed int16 values (little-endian)
+left_tenths, centre_tenths, right_tenths = struct.unpack('<hhh', bytes(data))
+
+left = left_tenths / 10.0
+centre = centre_tenths / 10.0
+right = right_tenths / 10.0
 
 print(f"Left: {left}°C, Centre: {centre}°C, Right: {right}°C")
 ```
@@ -150,16 +159,26 @@ print(f"Left: {left}°C, Centre: {centre}°C, Right: {right}°C")
 ### Example 4: Read Full Frame (Debug/Alignment)
 
 ```python
-# Read all 768 pixels (1536 bytes as int16 tenths)
-frame = []
-for i in range(768):
-    data = bus.read_i2c_block_data(PICO_ADDR, 0x41, 2)
-    temp_tenths = (data[1] << 8) | data[0]
-    temp_celsius = temp_tenths / 10.0
-    frame.append(temp_celsius)
+import struct
+import numpy as np
+
+# Read all 768 pixels (1536 bytes as signed int16 tenths)
+# Method 1: Read all at once (if supported by your I2C master)
+try:
+    data = bus.read_i2c_block_data(PICO_ADDR, 0x41, 1536)
+    # Unpack 768 signed int16 values
+    temps_tenths = struct.unpack('<768h', bytes(data))
+    frame = [t / 10.0 for t in temps_tenths]
+except:
+    # Method 2: Read 2 bytes at a time (slower but more compatible)
+    frame = []
+    for i in range(768):
+        data = bus.read_i2c_block_data(PICO_ADDR, 0x41, 2)
+        temp_tenths = struct.unpack('<h', bytes(data))[0]
+        temp_celsius = temp_tenths / 10.0
+        frame.append(temp_celsius)
 
 # Reshape to 24x32
-import numpy as np
 thermal_image = np.array(frame).reshape(24, 32)
 ```
 
@@ -213,22 +232,17 @@ bus.write_byte_data(PICO_ADDR, 0x04, 98)
 ### Example 8: Raw 16-Channel Mode
 
 ```python
+import struct
+
 # Enable raw mode - skips tyre detection algorithm
 bus.write_byte_data(PICO_ADDR, 0x05, 0x01)  # RAW_MODE = 1
 
-# Read all 16 channels (32 bytes)
+# Read all 16 channels (32 bytes as signed int16)
 data = bus.read_i2c_block_data(PICO_ADDR, 0x30, 32)
 
-# Parse into 16 temperature values
-channels = []
-for i in range(16):
-    low = data[i * 2]
-    high = data[i * 2 + 1]
-    temp_tenths = low | (high << 8)
-    if temp_tenths > 32767:
-        temp_tenths -= 65536  # Handle signed int16
-    temp_celsius = temp_tenths / 10.0
-    channels.append(temp_celsius)
+# Unpack 16 signed int16 values (little-endian)
+temps_tenths = struct.unpack('<16h', bytes(data))
+channels = [t / 10.0 for t in temps_tenths]
 
 print("16-Channel Temperature Profile:")
 for i, temp in enumerate(channels):
@@ -317,17 +331,21 @@ CAN bus support will be added in a future firmware update. Set `OUTPUT_MODE` to 
 
 ### Frame Rate Breakdown
 
-Typical performance at 11.5 fps (87ms total per frame):
+Actual measured performance at 11.5 fps (~87ms total per frame):
 
 | Component | Time | Notes |
 |-----------|------|-------|
-| Sensor read | ~125ms | Hardware limited (MLX90640 at 16Hz refresh) |
-| Temperature calc | ~60ms | MLX90640_CalculateTo (floating point math) |
-| Tyre algorithm | ~5ms | Detection, zone calculations |
-| **USB serial output** | **3-7ms** | printf, fflush - *removable overhead* |
-| I2C slave update | <1ms | Interrupt-driven, non-blocking |
+| **Sensor read** | **~60ms** | Measured: includes MLX90640_GetFrameData call |
+| **Temperature calc** | **~20ms** | Measured: MLX90640_CalculateTo (floating point math) |
+| **Tyre algorithm** | **~2ms** | Detection, zone calculations |
+| **USB serial output** | **~3ms** | printf, fflush - *removable overhead* |
+| **I2C slave update** | **<1ms** | Interrupt-driven, non-blocking |
+| **Total** | **~87ms** | **= 11.5 fps actual measured performance** |
 
-**Total bottleneck:** Sensor read + calculation = ~185ms minimum
+**Note:** MLX90640 sensor has theoretical 16Hz (62.5ms) refresh rate, but actual frame acquisition
+varies based on I2C bus speed and sensor internal timing. Total time also includes algorithm overhead.
+
+**Theoretical minimum** with no algorithm or serial output: ~80ms (~12.5 fps)
 
 ### Performance Optimization
 

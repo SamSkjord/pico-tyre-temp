@@ -1,12 +1,17 @@
 /**
  * i2c_slave.c
  * I2C slave/peripheral implementation
+ *
+ * SAFETY: Uses interrupt handler to service I2C requests.
+ * Shared data access between ISR and main thread requires
+ * careful synchronization (see i2c_slave_update).
  */
 
 #include "i2c_slave.h"
 #include "hardware/i2c.h"
 #include "hardware/irq.h"
 #include "hardware/gpio.h"
+#include "hardware/sync.h"
 #include <string.h>
 #include <math.h>
 
@@ -20,10 +25,17 @@ static I2CSlaveState state;
 static uint8_t register_map[256];  // Full register space
 static const float *current_frame = NULL;  // Pointer to current frame data
 
-// Helper to convert float temp to int16 tenths
+// Helper to convert float temp to int16 tenths with overflow protection
 static inline int16_t temp_to_int16_tenths(float temp) {
     if (!isfinite(temp)) return 0;
-    return (int16_t)(temp * 10.0f);
+
+    float scaled = temp * 10.0f;
+
+    // Clamp to int16 range: -32768 to +32767 (representing -3276.8°C to +3276.7°C)
+    if (scaled > 32767.0f) return 32767;
+    if (scaled < -32768.0f) return -32768;
+
+    return (int16_t)scaled;
 }
 
 // I2C slave IRQ handler
@@ -35,18 +47,20 @@ static void i2c_slave_handler(void) {
         uint8_t value = 0;
 
         if (state.current_register == REG_FRAME_DATA_START) {
-            // Streaming full frame data
-            if (current_frame && state.frame_read_offset < 768) {
+            // Streaming full frame data (768 pixels × 2 bytes = 1536 bytes total)
+            if (current_frame && state.frame_read_offset < 1536) {  // FIX: was 768, should be 1536
                 // Send as int16 tenths (2 bytes per pixel)
-                uint16_t idx = state.frame_read_offset / 2;
-                if (state.frame_read_offset % 2 == 0) {
-                    // Low byte
-                    int16_t temp = temp_to_int16_tenths(current_frame[idx]);
-                    value = temp & 0xFF;
-                } else {
-                    // High byte
-                    int16_t temp = temp_to_int16_tenths(current_frame[idx]);
-                    value = (temp >> 8) & 0xFF;
+                uint16_t pixel_idx = state.frame_read_offset / 2;
+                if (pixel_idx < 768) {  // Bounds check for safety
+                    if (state.frame_read_offset % 2 == 0) {
+                        // Low byte
+                        int16_t temp = temp_to_int16_tenths(current_frame[pixel_idx]);
+                        value = temp & 0xFF;
+                    } else {
+                        // High byte
+                        int16_t temp = temp_to_int16_tenths(current_frame[pixel_idx]);
+                        value = (temp >> 8) & 0xFF;
+                    }
                 }
                 state.frame_read_offset++;
             }
@@ -57,6 +71,7 @@ static void i2c_slave_handler(void) {
         }
 
         I2C_SLAVE_INST->hw->data_cmd = value;
+        __dmb();  // Memory barrier - ensure write completes before clearing interrupt
         I2C_SLAVE_INST->hw->clr_rd_req;
     }
 
@@ -66,28 +81,32 @@ static void i2c_slave_handler(void) {
 
         if (state.current_register == 0xFF) {
             // First byte is register address
-            state.current_register = value;
+            if (value < 0xFF) {  // Validate register address
+                state.current_register = value;
 
-            // Reset frame read offset when accessing frame data
-            if (value == REG_FRAME_DATA_START) {
-                state.frame_read_offset = 0;
+                // Reset frame read offset when accessing frame data
+                if (value == REG_FRAME_DATA_START) {
+                    state.frame_read_offset = 0;
+                }
             }
         } else {
             // Subsequent bytes are data writes
-            if (state.current_register >= REG_CONFIG_START &&
-                state.current_register <= REG_RESERVED_0F) {
+            uint8_t target_reg = state.current_register;
+
+            // Validate target register is writable BEFORE accepting the write
+            if (target_reg >= REG_CONFIG_START && target_reg <= REG_RESERVED_0F) {
                 // Configuration registers are writable
-                register_map[state.current_register] = value;
+                register_map[target_reg] = value;
 
                 // Handle special registers
-                if (state.current_register == REG_I2C_ADDRESS) {
+                if (target_reg == REG_I2C_ADDRESS) {
                     // I2C address change (requires restart)
                     state.slave_address = value & 0x7F;
-                } else if (state.current_register == REG_OUTPUT_MODE) {
+                } else if (target_reg == REG_OUTPUT_MODE) {
                     // Output mode change
                     state.output_mode = (OutputMode)value;
                 }
-            } else if (state.current_register == REG_CMD) {
+            } else if (target_reg == REG_CMD) {
                 // Command register
                 if (value == CMD_RESET) {
                     // Software reset (would need to implement)
@@ -95,6 +114,7 @@ static void i2c_slave_handler(void) {
                     register_map[REG_WARNINGS] = 0;
                 }
             }
+            // Note: Writes to read-only registers are silently ignored
 
             state.current_register++;
         }
@@ -102,8 +122,11 @@ static void i2c_slave_handler(void) {
 
     if (status & I2C_IC_INTR_STAT_R_STOP_DET_BITS) {
         // Stop condition - reset register pointer
+        // This provides automatic timeout/reset: if master doesn't complete a
+        // transaction, the STOP condition resets our state machine
         state.current_register = 0xFF;
         I2C_SLAVE_INST->hw->clr_stop_det;
+        __dmb();  // Memory barrier after clearing interrupt
     }
 }
 
@@ -151,8 +174,12 @@ void i2c_slave_init(uint8_t address) {
 void i2c_slave_update(const FrameData *data, float fps, const float *frame) {
     if (!state.enabled) return;
 
-    // Store frame pointer for full frame access
+    // Store frame pointer for full frame access (atomic pointer write on ARM)
     current_frame = frame;
+
+    // CRITICAL SECTION: Disable I2C interrupts while updating shared register_map
+    // to prevent race condition with ISR reading registers mid-update
+    uint32_t irq_state = save_and_disable_interrupts();
 
     // Update status registers
     register_map[REG_FRAME_NUMBER_L] = data->frame_number & 0xFF;
@@ -224,6 +251,9 @@ void i2c_slave_update(const FrameData *data, float fps, const float *frame) {
             register_map[reg_base + 1] = (temp >> 8) & 0xFF;
         }
     }
+
+    // END CRITICAL SECTION: Re-enable interrupts
+    restore_interrupts(irq_state);
 }
 
 OutputMode i2c_slave_get_output_mode(void) {
@@ -243,7 +273,11 @@ bool i2c_slave_output_enabled(OutputMode mode) {
 float i2c_slave_get_emissivity(void) {
     // Convert uint8 (0-100) to float (0.0-1.0)
     uint8_t emiss = register_map[REG_EMISSIVITY];
-    if (emiss > 100) emiss = 100;  // Clamp to max 1.0
+
+    // Validate and clamp to reasonable range (10-100 = 0.10-1.00)
+    if (emiss < 10) emiss = 10;    // Minimum 0.10 (highly reflective)
+    if (emiss > 100) emiss = 100;  // Maximum 1.00 (perfect blackbody)
+
     return emiss / 100.0f;
 }
 

@@ -1,12 +1,23 @@
 /**
  * thermal_algorithm.c
  * Optimized thermal tyre detection algorithm in C
+ *
+ * THREAD SAFETY: This module uses static buffers and is NOT thread-safe.
+ * Only call from a single thread. Do NOT use with FreeRTOS or multicore
+ * without adding proper synchronization.
  */
 
 #include "thermal_algorithm.h"
 #include <math.h>
 #include <string.h>
 #include <stdlib.h>
+
+// Temperature validity threshold (MLX90640 returns -273.15°C for invalid pixels)
+#define TEMP_VALID_THRESHOLD -270.0f
+
+// Warning bit flags
+#define WARNING_HIGH_GRADIENT 0x01
+#define WARNING_HIGH_VARIANCE 0x02
 
 // Static frame counter
 static uint32_t frame_counter = 0;
@@ -76,7 +87,7 @@ static void extract_middle_rows(const float *frame, float *profile) {
 
         for (int row = 10; row <= 13; row++) {
             int idx = row * SENSOR_WIDTH + col;
-            if (frame[idx] > -270.0f) {  // Valid temperature
+            if (frame[idx] > TEMP_VALID_THRESHOLD) {  // Valid temperature
                 sum += frame[idx];
                 count++;
             }
@@ -168,8 +179,9 @@ static void analyze_zone(const float *profile, int start, int end, ZoneAnalysis 
         return;
     }
 
-    // Use static buffer instead of malloc
+    // Use static buffers instead of malloc (NOT thread-safe)
     static float zone_data[SENSOR_WIDTH];
+    static float zone_data_copy[SENSOR_WIDTH];  // For median calculation
 
     for (int i = 0; i < len; i++) {
         zone_data[i] = profile[start + i];
@@ -178,7 +190,12 @@ static void analyze_zone(const float *profile, int start, int end, ZoneAnalysis 
     // Calculate statistics
     result->count = len;
     result->avg = fast_mean(zone_data, len);
-    result->median = fast_median(zone_data, len);
+
+    // Copy data before median calculation (fast_median sorts in place)
+    memcpy(zone_data_copy, zone_data, len * sizeof(float));
+    result->median = fast_median(zone_data_copy, len);
+
+    // Use original unsorted data for MAD calculation
     result->mad = fast_mad(zone_data, len, result->median);
 
     // Find min/max
@@ -209,13 +226,15 @@ void thermal_algorithm_process(const float *frame, FrameData *result, ThermalCon
         int tyre_end = result->detection.span_end;
         int tyre_width = result->detection.tyre_width;
 
+        // Divide into thirds, remainder pixels go to centre zone automatically
+        // This ensures all pixels are accounted for
         int third = tyre_width / 3;
 
         int left_start = tyre_start;
         int left_end = tyre_start + third - 1;
 
         int centre_start = left_end + 1;
-        int centre_end = tyre_end - third;
+        int centre_end = tyre_end - third;  // Centre gets the remainder pixels
 
         int right_start = centre_end + 1;
         int right_end = tyre_end;
@@ -229,11 +248,11 @@ void thermal_algorithm_process(const float *frame, FrameData *result, ThermalCon
 
         // Check for warnings
         if (fabsf(result->lateral_gradient) > 10.0f) {
-            result->warnings |= 0x01;  // High gradient warning
+            result->warnings |= WARNING_HIGH_GRADIENT;
         }
 
         if (result->centre.max - result->centre.min > 20.0f) {
-            result->warnings |= 0x02;  // High variance warning
+            result->warnings |= WARNING_HIGH_VARIANCE;
         }
     } else {
         // No tyre detected - analyze full profile

@@ -27,6 +27,13 @@
 // LED pin for status indication
 #define LED_PIN PICO_DEFAULT_LED_PIN
 
+// Default emissivity and temperature constants
+#define DEFAULT_EMISSIVITY 0.95f
+#define REFLECTED_TEMP_AMBIENT 23.15f  // Ambient reflected temperature in Celsius
+#define SENSOR_ERROR_RETRY_MS 100
+#define SENSOR_INIT_STABILIZE_MS 2000
+#define USB_ENUM_WAIT_MS 5000
+
 // Timing measurement
 static uint64_t last_frame_time = 0;
 static uint32_t total_frames = 0;
@@ -35,7 +42,7 @@ static uint32_t total_frames = 0;
 static paramsMLX90640 mlx_params;
 static uint16_t mlx_frame_raw[834];  // Raw frame data from sensor
 static float mlx_frame[768];  // Calculated temperatures
-static uint16_t eeData[832];  // EEPROM data - moved to static to avoid stack overflow
+static uint16_t eeData[832] = {0};  // EEPROM data - explicitly initialized to zero
 
 void setup_mlx90640(void) {
     printf("\n========================================\n");
@@ -86,7 +93,7 @@ void setup_mlx90640(void) {
     MLX90640_SetRefreshRate(MLX90640_ADDR, 0x05);  // 16Hz
 
     printf("Waiting for sensor to stabilize...\n");
-    sleep_ms(2000);  // Give sensor time to stabilize after power-on
+    sleep_ms(SENSOR_INIT_STABILIZE_MS);  // Give sensor time to stabilize after power-on
 
     printf("Sensor initialized successfully!\n");
     printf("Expected performance: 5-10Hz frame rate\n\n");
@@ -113,7 +120,7 @@ int main(void) {
     communication_init();
 
     // Wait for USB serial to enumerate (increased for stability)
-    sleep_ms(5000);
+    sleep_ms(USB_ENUM_WAIT_MS);
 
     gpio_put(LED_PIN, 1);
     printf("=== USB Serial initialized! ===\n");
@@ -161,15 +168,34 @@ int main(void) {
         uint64_t t_sensor = time_us_64();
 
         if (status < 0) {
-            printf("ERROR: Frame read failed (code %d)\n", status);
+            printf("ERROR: Frame read failed (code %d) - sensor may be disconnected\n", status);
             fflush(stdout);
-            sleep_ms(100);
+
+            // Blink LED rapidly to indicate error
+            for (int i = 0; i < 5; i++) {
+                gpio_put(LED_PIN, 1);
+                sleep_ms(50);
+                gpio_put(LED_PIN, 0);
+                sleep_ms(50);
+            }
+
+            // Wait before retry to avoid hammering the I2C bus
+            sleep_ms(SENSOR_ERROR_RETRY_MS);
             continue;
         }
 
         // Calculate temperatures from raw data
         float emissivity = i2c_slave_get_emissivity();
-        float tr = 23.15f;  // Reflected temperature
+
+        // Validate emissivity is in reasonable range (already clamped by getter)
+        if (emissivity < 0.1f || emissivity > 1.0f) {
+            emissivity = DEFAULT_EMISSIVITY;  // Fallback to default
+        }
+
+        float tr = REFLECTED_TEMP_AMBIENT;
+
+        // Calculate temperatures - this modifies mlx_frame in place
+        // Note: No return value to check, assumes success
         MLX90640_CalculateTo(mlx_frame_raw, &mlx_params, emissivity, tr, mlx_frame);
 
         uint64_t t_calc = time_us_64();
