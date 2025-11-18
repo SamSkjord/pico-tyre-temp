@@ -39,16 +39,14 @@ brew install --cask gcc-arm-embedded
 export PICO_SDK_PATH=~/pico-sdk
 ```
 
-See [BUILD.md](BUILD.md) for Linux/Windows instructions.
+See [docs/BUILD.md](docs/BUILD.md) for Linux/Windows instructions.
 
 ### 2. Download and Build
 
 ```bash
-cd c_version
-
 # Download MLX90640 library
-chmod +x download_mlx_library.sh
-./download_mlx_library.sh
+chmod +x tools/download_mlx_library.sh
+./tools/download_mlx_library.sh
 
 # Build
 mkdir build && cd build
@@ -172,17 +170,32 @@ Same thermal tyre detection as Python version:
 ## File Structure
 
 ```
-c_version/
+pico-tyre-temp/
 ├── README.md                   # This file
-├── BUILD.md                    # Detailed build instructions
 ├── CMakeLists.txt              # Build configuration
-├── download_mlx_library.sh     # Download Melexis library
 │
 ├── main.c                      # Main application
 ├── thermal_algorithm.c/h       # Tyre detection algorithm
 ├── communication.c/h           # Serial + I2C output
+├── i2c_slave.c/h              # I2C slave mode implementation
 │
-└── mlx90640/
+├── docs/                       # Documentation
+│   ├── BUILD.md               # Detailed build instructions
+│   ├── I2C_SLAVE.md           # I2C slave API reference
+│   ├── QUICKSTART.md          # Quick start guide
+│   └── VISUALIZER.md          # Visualizer usage guide
+│
+├── tools/                      # Utilities and scripts
+│   ├── download_mlx_library.sh  # Download Melexis library
+│   ├── build_and_flash.sh      # Build and flash script
+│   ├── visualizer.py           # Real-time visualization
+│   └── requirements_visualizer.txt
+│
+├── tests/                      # Python test scripts
+│   ├── test_i2c_slave.py      # I2C slave tests
+│   └── test_*.py              # Other tests
+│
+└── mlx90640/                   # External library
     ├── MLX90640_API.c         # Official Melexis library
     ├── MLX90640_API.h
     ├── MLX90640_I2C_Driver.c  # Pico-specific I2C driver
@@ -239,16 +252,16 @@ A real-time matplotlib visualizer is included:
 
 ```bash
 # Install dependencies
-pip install -r requirements_visualizer.txt
+pip install -r tools/requirements_visualizer.txt
 
 # Run visualizer (auto-detects port)
-python3 visualizer.py
+python3 tools/visualizer.py
 
 # Or specify port
-python3 visualizer.py --port /dev/tty.usbmodem14201
+python3 tools/visualizer.py --port /dev/tty.usbmodem14201
 
 # List available ports
-python3 visualizer.py --list
+python3 tools/visualizer.py --list
 ```
 
 **Displays:**
@@ -261,7 +274,7 @@ python3 visualizer.py --list
 
 **Note:** Visualizer displays at ~4 fps (matplotlib limit). The Pico continues collecting at 11.5 fps. Frame skipping is expected and normal.
 
-See [VISUALIZER.md](VISUALIZER.md) for detailed usage.
+See [docs/VISUALIZER.md](docs/VISUALIZER.md) for detailed usage.
 
 ## Troubleshooting
 
@@ -274,7 +287,7 @@ export PICO_SDK_PATH=~/pico-sdk
 
 **"MLX90640_API.c not found"**
 ```bash
-./download_mlx_library.sh
+./tools/download_mlx_library.sh
 ```
 
 ### Runtime Errors
@@ -312,7 +325,7 @@ Edit `main.c`:
 
 ## Future Improvements
 
-- [ ] I2C peripheral/slave mode (second I2C channel for downstream devices)
+- [x] I2C peripheral/slave mode (✅ implemented on GP26/GP27 at address 0x08)
 - [ ] Multi-core processing (sensor on core 0, algorithm on core 1)
 - [ ] Optimize `MLX90640_CalculateTo()` - the 61.5ms bottleneck
 - [ ] Fixed-point math or SIMD for temperature calculations
@@ -332,4 +345,4 @@ MIT License - same as main thermal-tyre-driver package.
 
 ---
 
-**Ready to build?** See [BUILD.md](BUILD.md) for step-by-step instructions.
+**Ready to build?** See [docs/BUILD.md](docs/BUILD.md) for step-by-step instructions.
