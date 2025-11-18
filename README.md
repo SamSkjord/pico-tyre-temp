@@ -1,5 +1,9 @@
 # Pico Tyre Temperature Monitor
 
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/SamSkjord/pico-tyre-temp)
+[![AI Slop](https://img.shields.io/badge/AI%20Slop%20-%20ChatGPT%20Codex%205-beige)](https://www.morningstar.com/news/marketwatch/20251003175/the-ai-bubble-is-17-times-the-size-of-the-dot-com-frenzy-and-four-times-subprime-this-analyst-argues)
+[![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+
 **High-performance thermal tyre monitoring for Raspberry Pi Pico**
 
 Real-time thermal imaging at 11.5 fps with automatic tyre detection and live visualization.
