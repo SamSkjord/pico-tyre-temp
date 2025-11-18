@@ -98,7 +98,10 @@ void setup_mlx90640(void) {
     if (status != 0) {
         printf("ERROR: Failed to extract parameters (code %d)\n", status);
         while (1) {
-            sleep_ms(1000);
+            gpio_put(LED_PIN, 1);
+            sleep_ms(ERROR_BLINK_MS * 2);  // Slower error blink for fatal error
+            gpio_put(LED_PIN, 0);
+            sleep_ms(ERROR_BLINK_MS * 2);
         }
     }
 
@@ -168,7 +171,7 @@ int main(void) {
         // Get frame from sensor
         uint64_t t_start = time_us_64();
 
-        // Blink LED to show we're alive
+        // Blink LED to show we're alive (normal operation indicator)
         if (total_frames % 2 == 0) {
             gpio_put(LED_PIN, 1);
         } else {

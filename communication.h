@@ -20,7 +20,4 @@ void send_serial_compact(const FrameData *data, float fps);
 // Send frame data over serial (full JSON format)
 void send_serial_json(const FrameData *data, float fps, const float *temperature_profile);
 
-// Update I2C peripheral registers with latest data
-void update_i2c_registers(const FrameData *data);
-
 #endif // COMMUNICATION_H

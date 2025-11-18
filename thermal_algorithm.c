@@ -66,6 +66,7 @@ float fast_mad(const float *data, uint16_t len, float median) {
     if (len < 2) return 0.0f;
 
     // Use static buffer instead of malloc to avoid heap issues
+    // Thread-safety: Static buffer NOT thread-safe - only call from single thread
     static float deviations[SENSOR_WIDTH];
     if (len > SENSOR_WIDTH) return 0.0f;
 
@@ -73,6 +74,7 @@ float fast_mad(const float *data, uint16_t len, float median) {
         deviations[i] = fabsf(data[i] - median);
     }
 
+    // Note: fast_median() sorts deviations array in-place (destructive operation)
     float mad = fast_median(deviations, len);
 
     return mad * 1.4826f;  // Scale factor for consistency with std dev
