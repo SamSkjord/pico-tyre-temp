@@ -24,25 +24,44 @@
 #define MLX90640_ADDR 0x33
 #define COMPACT_OUTPUT 1  // 1 for CSV, 0 for JSON
 
+// MLX90640 sensor dimensions
+#define MLX90640_ROWS 24  // Sensor has 24 rows
+#define MLX90640_COLS 32  // Sensor has 32 columns
+#define MLX90640_PIXELS (MLX90640_ROWS * MLX90640_COLS)  // Total 768 pixels
+
 // LED pin for status indication
 #define LED_PIN PICO_DEFAULT_LED_PIN
 
 // Default emissivity and temperature constants
-#define DEFAULT_EMISSIVITY 0.95f
-#define REFLECTED_TEMP_AMBIENT 23.15f  // Ambient reflected temperature in Celsius
-#define SENSOR_ERROR_RETRY_MS 100
-#define SENSOR_INIT_STABILIZE_MS 2000
-#define USB_ENUM_WAIT_MS 5000
+#define DEFAULT_EMISSIVITY 0.95f  // Typical for rubber tyres (range 0.93-0.97)
+#define REFLECTED_TEMP_AMBIENT 23.15f  // Ambient reflected temperature (room temp baseline)
+#define SENSOR_ERROR_RETRY_MS 100  // Wait time before retrying failed sensor read
+#define SENSOR_INIT_STABILIZE_MS 2000  // Sensor warm-up time after power-on
+#define USB_ENUM_WAIT_MS 5000  // USB enumeration delay for stability
 
-// Timing measurement
-static uint64_t last_frame_time = 0;
-static uint32_t total_frames = 0;
+// MLX90640 refresh rate setting
+#define MLX90640_REFRESH_16HZ 0x05  // 16Hz refresh rate parameter
 
-// MLX90640 parameters
+// Timing and diagnostic constants
+#define STARTUP_BLINKS 10  // Number of LED blinks during startup
+#define STARTUP_BLINK_MS 50  // LED blink duration during startup
+#define STARTUP_DELAY_MS 500  // Delay after startup blinks before USB init
+#define I2C_INIT_DELAY_MS 100  // Delay after I2C initialization
+#define ERROR_BLINK_COUNT 5  // Number of rapid blinks on sensor error
+#define ERROR_BLINK_MS 50  // LED blink duration during error indication
+#define USB_STABILIZE_FRAMES 3  // Number of initial frames to delay for USB stability
+#define TIMING_PRINT_INTERVAL 10  // Print timing stats every N frames
+#define MIN_FRAME_TIME_MS 80.0f  // Theoretical minimum frame time
+#define MIN_FRAME_TIME_THRESHOLD_MS 100.0f  // Threshold for "running too fast" warning
+
+// Frame counter (volatile for potential ISR access in future)
+static volatile uint32_t total_frames = 0;
+
+// MLX90640 parameters and buffers
 static paramsMLX90640 mlx_params;
-static uint16_t mlx_frame_raw[834];  // Raw frame data from sensor
-static float mlx_frame[768];  // Calculated temperatures
-static uint16_t eeData[832] = {0};  // EEPROM data - explicitly initialized to zero
+static uint16_t mlx_frame_raw[834];  // Raw frame data: 832 EEPROM + 2 control words
+static float mlx_frame[MLX90640_PIXELS];  // Calculated temperatures (24 rows × 32 cols)
+static uint16_t eeData[832];  // EEPROM calibration data
 
 void setup_mlx90640(void) {
     printf("\n========================================\n");
@@ -50,21 +69,15 @@ void setup_mlx90640(void) {
     printf("========================================\n\n");
 
     printf("Initializing I2C...\n");
-    fflush(stdout);
-    MLX90640_I2CInit();
+    MLX90640_I2CInit();  // Note: Returns void, cannot check status
     printf("I2C initialized OK\n");
-    fflush(stdout);
-    sleep_ms(100);
+    sleep_ms(I2C_INIT_DELAY_MS);
 
     printf("Detecting MLX90640 sensor at 0x%02X...\n", MLX90640_ADDR);
-    fflush(stdout);
 
     // Try to read EEPROM to verify sensor is present
-    printf("About to call MLX90640_DumpEE...\n");
-    fflush(stdout);
     int status = MLX90640_DumpEE(MLX90640_ADDR, eeData);
     printf("MLX90640_DumpEE returned: %d\n", status);
-    fflush(stdout);
     if (status != 0) {
         printf("ERROR: Could not detect MLX90640 sensor!\n");
         printf("Check wiring:\n");
@@ -74,9 +87,9 @@ void setup_mlx90640(void) {
         printf("  MLX90640 SCL → Pico GP1 (Pin 2)\n");
         while (1) {
             gpio_put(LED_PIN, 1);
-            sleep_ms(100);
+            sleep_ms(ERROR_BLINK_MS * 2);  // Slower error blink for fatal sensor error
             gpio_put(LED_PIN, 0);
-            sleep_ms(100);
+            sleep_ms(ERROR_BLINK_MS * 2);
         }
     }
 
@@ -90,7 +103,10 @@ void setup_mlx90640(void) {
     }
 
     printf("Setting refresh rate to 16Hz...\n");
-    MLX90640_SetRefreshRate(MLX90640_ADDR, 0x05);  // 16Hz
+    status = MLX90640_SetRefreshRate(MLX90640_ADDR, MLX90640_REFRESH_16HZ);
+    if (status != 0) {
+        printf("WARNING: Failed to set refresh rate (code %d)\n", status);
+    }
 
     printf("Waiting for sensor to stabilize...\n");
     sleep_ms(SENSOR_INIT_STABILIZE_MS);  // Give sensor time to stabilize after power-on
@@ -105,16 +121,16 @@ int main(void) {
     gpio_set_dir(LED_PIN, GPIO_OUT);
 
     // Rapid blink to show we're alive
-    for (int i = 0; i < 10; i++) {
+    for (int i = 0; i < STARTUP_BLINKS; i++) {
         gpio_put(LED_PIN, 1);
-        sleep_ms(50);
+        sleep_ms(STARTUP_BLINK_MS);
         gpio_put(LED_PIN, 0);
-        sleep_ms(50);
+        sleep_ms(STARTUP_BLINK_MS);
     }
 
     // LED off before stdio_init
     gpio_put(LED_PIN, 0);
-    sleep_ms(500);
+    sleep_ms(STARTUP_DELAY_MS);
 
     // Initialize communication
     communication_init();
@@ -124,7 +140,6 @@ int main(void) {
 
     gpio_put(LED_PIN, 1);
     printf("=== USB Serial initialized! ===\n");
-    fflush(stdout);
 
     // Initialize MLX90640
     setup_mlx90640();
@@ -149,8 +164,6 @@ int main(void) {
 
     gpio_put(LED_PIN, 0);  // LED off - ready
 
-    last_frame_time = time_us_64();
-
     while (1) {
         // Get frame from sensor
         uint64_t t_start = time_us_64();
@@ -169,14 +182,13 @@ int main(void) {
 
         if (status < 0) {
             printf("ERROR: Frame read failed (code %d) - sensor may be disconnected\n", status);
-            fflush(stdout);
 
             // Blink LED rapidly to indicate error
-            for (int i = 0; i < 5; i++) {
+            for (int i = 0; i < ERROR_BLINK_COUNT; i++) {
                 gpio_put(LED_PIN, 1);
-                sleep_ms(50);
+                sleep_ms(ERROR_BLINK_MS);
                 gpio_put(LED_PIN, 0);
-                sleep_ms(50);
+                sleep_ms(ERROR_BLINK_MS);
             }
 
             // Wait before retry to avoid hammering the I2C bus
@@ -215,15 +227,16 @@ int main(void) {
         uint64_t frame_time_us = t_algo - t_start;
         float fps = (frame_time_us > 0) ? (1000000.0f / frame_time_us) : 0.0f;
 
-        // Create temperature profile by averaging 24 rows into single 32-pixel row
+        // Create temperature profile by averaging all rows into single horizontal profile
         // This gives us a horizontal temperature profile across the sensor
-        static float temp_profile[32];
-        for (int col = 0; col < 32; col++) {
+        // Thread-safety: Only accessed in main loop, never from ISR
+        static float temp_profile[MLX90640_COLS];
+        for (int col = 0; col < MLX90640_COLS; col++) {
             float sum = 0.0f;
-            for (int row = 0; row < 24; row++) {
-                sum += mlx_frame[row * 32 + col];
+            for (int row = 0; row < MLX90640_ROWS; row++) {
+                sum += mlx_frame[row * MLX90640_COLS + col];
             }
-            temp_profile[col] = sum / 24.0f;
+            temp_profile[col] = sum / (float)MLX90640_ROWS;
         }
 
         // Update I2C slave registers
@@ -247,8 +260,8 @@ int main(void) {
 
         total_frames++;
 
-        // Print timing every 10 frames
-        if (total_frames % 10 == 0) {
+        // Print timing every N frames (configurable via TIMING_PRINT_INTERVAL)
+        if (total_frames % TIMING_PRINT_INTERVAL == 0) {
             float sensor_ms = (t_sensor - t_start) / 1000.0f;
             float calc_ms = (t_calc - t_sensor) / 1000.0f;
             float algo_ms = (t_algo - t_calc) / 1000.0f;
@@ -264,12 +277,12 @@ int main(void) {
         gpio_put(LED_PIN, total_frames % 2);
 
         // Small delay for first few frames to let USB stabilize
-        if (total_frames <= 3) {
-            sleep_ms(50);
+        if (total_frames <= USB_STABILIZE_FRAMES) {
+            sleep_ms(STARTUP_BLINK_MS);
         }
 
         // Small delay if running too fast (shouldn't happen)
-        if (frame_time_ms < 100.0f) {
+        if (frame_time_ms < MIN_FRAME_TIME_THRESHOLD_MS) {
             sleep_ms(1);
         }
     }

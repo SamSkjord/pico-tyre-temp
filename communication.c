@@ -9,17 +9,16 @@
 #include <math.h>
 #include "pico/stdlib.h"
 
-// I2C peripheral register storage (for future I2C slave implementation)
-static uint8_t i2c_registers[16];
+// Note: I2C slave implementation moved to i2c_slave.c module
 
 void communication_init(void) {
     stdio_init_all();  // Initialize USB serial
-    memset(i2c_registers, 0, sizeof(i2c_registers));
 }
 
 // Helper to sanitize float values (replace NaN/Inf with 0)
+// Uses explicit checks instead of isfinite() to avoid signaling NaN issues on some platforms
 static inline float sanitize_float(float val) {
-    if (!isfinite(val)) return 0.0f;
+    if (isnan(val) || isinf(val)) return 0.0f;
     return val;
 }
 
@@ -127,44 +126,7 @@ void send_serial_json(const FrameData *data, float fps, const float *temperature
     fflush(stdout);
 }
 
-void update_i2c_registers(const FrameData *data) {
-    // Pack data into I2C registers (int16 tenths of degree C)
-    // Register map (same as CircuitPython version):
-    // 0x00-0x01: Left temp (int16, tenths)
-    // 0x02-0x03: Centre temp (int16, tenths)
-    // 0x04-0x05: Right temp (int16, tenths)
-    // 0x06: Confidence (uint8, 0-100%)
-    // 0x07: Warnings
-    // 0x08: Span start
-    // 0x09: Span end
-    // 0x0A: Tyre width
-    // 0x0B-0x0C: Lateral gradient (int16, tenths)
-    // 0x0D-0x0E: Frame counter (uint16)
-
-    int16_t left_temp = (int16_t)(data->left.avg * 10.0f);
-    int16_t centre_temp = (int16_t)(data->centre.avg * 10.0f);
-    int16_t right_temp = (int16_t)(data->right.avg * 10.0f);
-    int16_t lat_grad = (int16_t)(data->lateral_gradient * 10.0f);
-    uint8_t confidence = (uint8_t)(data->detection.confidence * 100.0f);
-    uint16_t frame = (uint16_t)(data->frame_number & 0xFFFF);
-
-    // Pack into registers (big-endian)
-    i2c_registers[0x00] = (left_temp >> 8) & 0xFF;
-    i2c_registers[0x01] = left_temp & 0xFF;
-    i2c_registers[0x02] = (centre_temp >> 8) & 0xFF;
-    i2c_registers[0x03] = centre_temp & 0xFF;
-    i2c_registers[0x04] = (right_temp >> 8) & 0xFF;
-    i2c_registers[0x05] = right_temp & 0xFF;
-    i2c_registers[0x06] = confidence;
-    i2c_registers[0x07] = data->warnings;
-    i2c_registers[0x08] = data->detection.span_start;
-    i2c_registers[0x09] = data->detection.span_end;
-    i2c_registers[0x0A] = data->detection.tyre_width;
-    i2c_registers[0x0B] = (lat_grad >> 8) & 0xFF;
-    i2c_registers[0x0C] = lat_grad & 0xFF;
-    i2c_registers[0x0D] = (frame >> 8) & 0xFF;
-    i2c_registers[0x0E] = frame & 0xFF;
-
-    // TODO: Implement I2C peripheral/slave mode on second I2C channel
-    // For now, registers are just stored in memory
-}
+// REMOVED: update_i2c_registers() function - dead code
+// This was superseded by i2c_slave.c implementation which uses little-endian
+// and a comprehensive register map. The old big-endian implementation
+// was never called and conflicted with the current I2C slave design.

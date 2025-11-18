@@ -15,15 +15,26 @@
 #include <string.h>
 #include <math.h>
 
-// Use I2C1 for slave mode (I2C0 is used for MLX90640)
+// Use I2C1 for slave mode (I2C0 is used for MLX90640 sensor)
 #define I2C_SLAVE_INST i2c1
 #define I2C_SLAVE_SDA_PIN 26  // GP26
 #define I2C_SLAVE_SCL_PIN 27  // GP27
+#define I2C_SLAVE_SPEED 100000  // 100kHz (slave speed largely irrelevant)
 
-// Internal state
-static I2CSlaveState state;
-static uint8_t register_map[256];  // Full register space
-static const float *current_frame = NULL;  // Pointer to current frame data
+// Raw channel calculation constants
+#define CHANNEL_ROW_START 10  // Middle 4 rows start
+#define CHANNEL_ROW_END 14    // Middle 4 rows end (exclusive)
+#define CHANNEL_ROW_COUNT (CHANNEL_ROW_END - CHANNEL_ROW_START)
+#define CHANNEL_COL_COUNT 2   // Each channel covers 2 columns
+#define CHANNEL_PIXEL_COUNT (CHANNEL_ROW_COUNT * CHANNEL_COL_COUNT)  // 8 pixels per channel
+
+// Register map size constant
+#define I2C_REGISTER_MAP_SIZE 256
+
+// Internal state (accessed from ISR and main thread)
+static volatile I2CSlaveState state;
+static uint8_t register_map[I2C_REGISTER_MAP_SIZE];  // Full register space
+static volatile const float *current_frame = NULL;  // Pointer to current frame data (volatile for ISR safety)
 
 // Helper to convert float temp to int16 tenths with overflow protection
 static inline int16_t temp_to_int16_tenths(float temp) {
@@ -31,9 +42,10 @@ static inline int16_t temp_to_int16_tenths(float temp) {
 
     float scaled = temp * 10.0f;
 
-    // Clamp to int16 range: -32768 to +32767 (representing -3276.8°C to +3276.7°C)
-    if (scaled > 32767.0f) return 32767;
-    if (scaled < -32768.0f) return -32768;
+    // Clamp to int16 range with safe boundaries (avoid exact boundary UB)
+    // Range: -32768 to +32767 (representing -3276.8°C to +3276.7°C)
+    if (scaled >= 32767.0f) return 32767;
+    if (scaled <= -32768.0f) return -32768;
 
     return (int16_t)scaled;
 }
@@ -46,19 +58,26 @@ static void i2c_slave_handler(void) {
         // Master is reading from us
         uint8_t value = 0;
 
-        if (state.current_register == REG_FRAME_DATA_START) {
+        // Snapshot current register to avoid TOCTOU race
+        uint8_t reg = state.current_register;
+
+        if (reg == REG_FRAME_DATA_START) {
+            // Snapshot offset to avoid TOCTOU race (offset could change during ISR)
+            uint16_t offset = state.frame_read_offset;
+
             // Streaming full frame data (768 pixels × 2 bytes = 1536 bytes total)
-            if (current_frame && state.frame_read_offset < 1536) {  // FIX: was 768, should be 1536
-                // Send as int16 tenths (2 bytes per pixel)
-                uint16_t pixel_idx = state.frame_read_offset / 2;
+            if (current_frame && offset < 1536) {
+                uint16_t pixel_idx = offset / 2;
                 if (pixel_idx < 768) {  // Bounds check for safety
-                    if (state.frame_read_offset % 2 == 0) {
+                    // CRITICAL FIX: Read pixel temperature ONCE to avoid reading from
+                    // two different frames if current_frame pointer updates mid-ISR
+                    int16_t temp = temp_to_int16_tenths(current_frame[pixel_idx]);
+
+                    if (offset % 2 == 0) {
                         // Low byte
-                        int16_t temp = temp_to_int16_tenths(current_frame[pixel_idx]);
                         value = temp & 0xFF;
                     } else {
                         // High byte
-                        int16_t temp = temp_to_int16_tenths(current_frame[pixel_idx]);
                         value = (temp >> 8) & 0xFF;
                     }
                 }
@@ -66,7 +85,7 @@ static void i2c_slave_handler(void) {
             }
         } else {
             // Regular register read
-            value = register_map[state.current_register];
+            value = register_map[reg];
             state.current_register++;  // Auto-increment
         }
 
@@ -78,16 +97,15 @@ static void i2c_slave_handler(void) {
     if (status & I2C_IC_INTR_STAT_R_RX_FULL_BITS) {
         // Master is writing to us
         uint8_t value = (uint8_t)I2C_SLAVE_INST->hw->data_cmd;
+        __dmb();  // Memory barrier after hardware register read
 
         if (state.current_register == 0xFF) {
-            // First byte is register address
-            if (value < 0xFF) {  // Validate register address
-                state.current_register = value;
+            // First byte is register address (all values 0x00-0xFF are valid)
+            state.current_register = value;
 
-                // Reset frame read offset when accessing frame data
-                if (value == REG_FRAME_DATA_START) {
-                    state.frame_read_offset = 0;
-                }
+            // Reset frame read offset when accessing frame data
+            if (value == REG_FRAME_DATA_START) {
+                state.frame_read_offset = 0;
             }
         } else {
             // Subsequent bytes are data writes
@@ -103,8 +121,12 @@ static void i2c_slave_handler(void) {
                     // I2C address change (requires restart)
                     state.slave_address = value & 0x7F;
                 } else if (target_reg == REG_OUTPUT_MODE) {
-                    // Output mode change
-                    state.output_mode = (OutputMode)value;
+                    // Output mode change - validate enum value before cast
+                    if (value == OUTPUT_MODE_USB_SERIAL || value == OUTPUT_MODE_I2C_SLAVE ||
+                        value == OUTPUT_MODE_CANBUS || value == OUTPUT_MODE_ALL) {
+                        state.output_mode = (OutputMode)value;
+                    }
+                    // Invalid values silently ignored
                 }
             } else if (target_reg == REG_CMD) {
                 // Command register
@@ -157,7 +179,7 @@ void i2c_slave_init(uint8_t address) {
     gpio_pull_up(I2C_SLAVE_SCL_PIN);
 
     // Initialize I2C1 in slave mode
-    i2c_init(I2C_SLAVE_INST, 100000);  // 100kHz (slave speed doesn't matter much)
+    i2c_init(I2C_SLAVE_INST, I2C_SLAVE_SPEED);
     i2c_set_slave_mode(I2C_SLAVE_INST, true, address);
 
     // Enable I2C interrupts
@@ -173,20 +195,24 @@ void i2c_slave_init(uint8_t address) {
 
 void i2c_slave_update(const FrameData *data, float fps, const float *frame) {
     if (!state.enabled) return;
+    if (!data) return;  // Validate data pointer
+    if (!frame) return;  // Validate frame pointer
 
-    // Store frame pointer for full frame access (atomic pointer write on ARM)
-    current_frame = frame;
-
-    // CRITICAL SECTION: Disable I2C interrupts while updating shared register_map
-    // to prevent race condition with ISR reading registers mid-update
+    // CRITICAL SECTION: Disable interrupts for atomic frame pointer update AND register updates
+    // This ensures ISR doesn't read partially updated state or stale frame pointer
     uint32_t irq_state = save_and_disable_interrupts();
+
+    // Store frame pointer (must be done with interrupts disabled for true atomicity)
+    current_frame = frame;
 
     // Update status registers
     register_map[REG_FRAME_NUMBER_L] = data->frame_number & 0xFF;
     register_map[REG_FRAME_NUMBER_H] = (data->frame_number >> 8) & 0xFF;
-    register_map[REG_FPS] = (uint8_t)fps;
+    register_map[REG_FPS] = (uint8_t)fminf(fps, 255.0f);  // Clamp to uint8 range
     register_map[REG_DETECTED] = data->detection.detected ? 1 : 0;
-    register_map[REG_CONFIDENCE] = (uint8_t)(data->detection.confidence * 100.0f);
+    // Clamp confidence to 0-100% range before scaling to avoid overflow
+    float confidence_clamped = fmaxf(0.0f, fminf(data->detection.confidence, 1.0f));
+    register_map[REG_CONFIDENCE] = (uint8_t)(confidence_clamped * 100.0f);
     register_map[REG_TYRE_WIDTH] = data->detection.tyre_width;
     register_map[REG_SPAN_START] = data->detection.span_start;
     register_map[REG_SPAN_END] = data->detection.span_end;
@@ -233,22 +259,28 @@ void i2c_slave_update(const FrameData *data, float fps, const float *frame) {
     if (frame) {
         for (int ch = 0; ch < 16; ch++) {
             float sum = 0.0f;
-            int col_start = ch * 2;  // Each channel covers 2 columns
+            int col_start = ch * CHANNEL_COL_COUNT;
 
-            // Average 2 columns × 4 middle rows (rows 10-13)
-            for (int row = 10; row < 14; row++) {
-                for (int col = col_start; col < col_start + 2; col++) {
-                    sum += frame[row * 32 + col];
+            // Average 2 columns × 4 middle rows
+            for (int row = CHANNEL_ROW_START; row < CHANNEL_ROW_END; row++) {
+                for (int col = col_start; col < col_start + CHANNEL_COL_COUNT; col++) {
+                    // Bounds check to prevent buffer overflow
+                    int idx = row * 32 + col;
+                    if (idx >= 0 && idx < 768) {
+                        sum += frame[idx];
+                    }
                 }
             }
 
-            float avg = sum / 8.0f;  // 2 cols × 4 rows
+            float avg = sum / (float)CHANNEL_PIXEL_COUNT;
             int16_t temp = temp_to_int16_tenths(avg);
 
-            // Pack into registers at 0x30 + (ch * 2)
+            // Pack into registers at 0x30 + (ch * 2) with bounds validation
             uint8_t reg_base = REG_RAW_CH0_L + (ch * 2);
-            register_map[reg_base] = temp & 0xFF;
-            register_map[reg_base + 1] = (temp >> 8) & 0xFF;
+            if (reg_base + 1 < I2C_REGISTER_MAP_SIZE) {  // Ensure we don't overflow register map
+                register_map[reg_base] = temp & 0xFF;
+                register_map[reg_base + 1] = (temp >> 8) & 0xFF;
+            }
         }
     }
 

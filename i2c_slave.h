@@ -2,12 +2,17 @@
  * i2c_slave.h
  * I2C slave/peripheral mode for downstream communication
  *
- * Uses i2c1 as slave while i2c0 remains master for MLX90640
+ * This module implements an I2C slave interface allowing other microcontrollers
+ * to read thermal tyre data over I2C. Uses i2c1 as slave while i2c0 remains
+ * master for MLX90640 sensor communication.
+ *
  * Default slave address: 0x08
+ * Supported speeds: 100kHz and 400kHz
+ * Register map: 256 bytes (0x00-0xFF)
  */
 
-#ifndef I2C_SLAVE_H
-#define I2C_SLAVE_H
+#ifndef PICO_TYRE_I2C_SLAVE_H
+#define PICO_TYRE_I2C_SLAVE_H
 
 #include <stdint.h>
 #include <stdbool.h>
@@ -16,12 +21,12 @@
 // Default I2C slave address
 #define I2C_SLAVE_DEFAULT_ADDR 0x08
 
-// Output modes
+// Output modes (valid values only - gaps 0x03-0xFE are invalid)
 typedef enum {
-    OUTPUT_MODE_USB_SERIAL = 0x00,  // USB serial (default)
-    OUTPUT_MODE_I2C_SLAVE = 0x01,   // I2C slave/peripheral
-    OUTPUT_MODE_CANBUS = 0x02,      // CAN bus (future)
-    OUTPUT_MODE_ALL = 0xFF          // All outputs enabled
+    OUTPUT_MODE_USB_SERIAL = 0x00,  // USB serial only (default)
+    OUTPUT_MODE_I2C_SLAVE = 0x01,   // I2C slave only
+    OUTPUT_MODE_CANBUS = 0x02,      // CAN bus only (reserved for future)
+    OUTPUT_MODE_ALL = 0xFF          // All outputs enabled simultaneously
 } OutputMode;
 
 // I2C Register Map
@@ -88,10 +93,11 @@ typedef enum {
 #define REG_RAW_CH0_H           0x31  // Channel 0 high byte
 // Channels 1-15 follow sequentially at 0x32-0x4F
 // Access via: 0x30 + (channel * 2) for low byte
+// IMPORTANT: Raw channels occupy 0x30-0x4F (32 bytes for 16 int16 values)
 
 // FULL FRAME ACCESS (0x50+) - Read Only
-#define REG_FRAME_ACCESS        0x40  // Read pointer for full frame data
-#define REG_FRAME_DATA_START    0x41  // Start of streaming frame data
+#define REG_FRAME_ACCESS        0x50  // Read pointer for full frame data (reserved, not implemented)
+#define REG_FRAME_DATA_START    0x51  // Start of streaming frame data
 
 // Special commands
 #define REG_CMD                 0xFF  // Command register
@@ -99,13 +105,14 @@ typedef enum {
 #define CMD_CLEAR_WARNINGS      0x02  // Clear warning flags
 #define CMD_FRAME_REQUEST       0x10  // Request new frame capture
 
-// I2C slave state
+// I2C slave state (shared between ISR and main thread - requires synchronization)
+// Note: Structure packing not specified - compiler may add padding
 typedef struct {
-    uint8_t slave_address;      // Current I2C slave address
-    OutputMode output_mode;     // Current output mode
-    uint8_t current_register;   // Current register pointer
-    uint16_t frame_read_offset; // Offset for full frame reads
-    bool enabled;               // I2C slave enabled
+    uint8_t slave_address;      // Current I2C slave address (7-bit)
+    OutputMode output_mode;     // Current output mode (enum)
+    uint8_t current_register;   // Current register pointer (0xFF = waiting for address)
+    uint16_t frame_read_offset; // Offset for full frame reads (byte offset 0-1535)
+    bool enabled;               // I2C slave enabled flag
 } I2CSlaveState;
 
 // Initialize I2C slave mode
@@ -129,4 +136,4 @@ float i2c_slave_get_emissivity(void);
 // Get raw mode setting
 bool i2c_slave_get_raw_mode(void);
 
-#endif // I2C_SLAVE_H
+#endif // PICO_TYRE_I2C_SLAVE_H

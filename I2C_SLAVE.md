@@ -2,6 +2,13 @@
 
 The Pico acts as an I2C slave/peripheral device, allowing other microcontrollers to read thermal tyre data over I2C.
 
+## Version History
+
+**Current Version:** Register map v2 (November 2025)
+- **Breaking Change:** Frame access registers moved from 0x40/0x41 → 0x50/0x51
+- **Reason:** Avoided collision with raw 16-channel data (0x30-0x4F)
+- **Migration:** Update all references to `REG_FRAME_DATA_START` from 0x41 to 0x51
+
 ## Hardware Configuration
 
 **Default I2C Slave Address:** `0x08`
@@ -86,14 +93,16 @@ Available when `RAW_MODE=1`. Each channel averages 2 columns × 4 middle rows (r
 
 **Access pattern:** `REG_BASE = 0x30 + (channel_num × 2)`
 
-### Full Frame Access (0x40+) - Read Only
+### Full Frame Access (0x50+) - Read Only
 
 | Address | Name | Description |
 |---------|------|-------------|
-| `0x40` | FRAME_ACCESS | Frame read pointer (reserved) |
-| `0x41` | FRAME_DATA_START | Streaming full frame data |
+| `0x50` | FRAME_ACCESS | Frame read pointer (reserved, not implemented) |
+| `0x51` | FRAME_DATA_START | Streaming full frame data |
 
-Reading from `0x41` returns full 768-pixel frame as **signed int16 tenths** (1536 bytes total: 768 pixels × 2 bytes).
+**IMPORTANT:** Register addresses changed from 0x40/0x41 to 0x50/0x51 to avoid collision with raw channel data (0x30-0x4F).
+
+Reading from `0x51` returns full 768-pixel frame as **signed int16 tenths** (1536 bytes total: 768 pixels × 2 bytes).
 Auto-increments through frame data with each read. Wraps to start after reading all 1536 bytes.
 
 ### Command Register (0xFF) - Write Only
@@ -163,22 +172,24 @@ import struct
 import numpy as np
 
 # Read all 768 pixels (1536 bytes as signed int16 tenths)
+# Use register 0x51 (changed from 0x41 to avoid collision with raw channels)
+
 # Method 1: Read all at once (if supported by your I2C master)
 try:
-    data = bus.read_i2c_block_data(PICO_ADDR, 0x41, 1536)
-    # Unpack 768 signed int16 values
+    data = bus.read_i2c_block_data(PICO_ADDR, 0x51, 1536)
+    # Unpack 768 signed int16 values (little-endian)
     temps_tenths = struct.unpack('<768h', bytes(data))
     frame = [t / 10.0 for t in temps_tenths]
 except:
     # Method 2: Read 2 bytes at a time (slower but more compatible)
     frame = []
     for i in range(768):
-        data = bus.read_i2c_block_data(PICO_ADDR, 0x41, 2)
-        temp_tenths = struct.unpack('<h', bytes(data))[0]
+        data = bus.read_i2c_block_data(PICO_ADDR, 0x51, 2)
+        temp_tenths = struct.unpack('<h', bytes(data))[0]  # Little-endian signed int16
         temp_celsius = temp_tenths / 10.0
         frame.append(temp_celsius)
 
-# Reshape to 24x32
+# Reshape to 24x32 (24 rows × 32 columns)
 thermal_image = np.array(frame).reshape(24, 32)
 ```
 
@@ -265,18 +276,24 @@ void setup() {
 }
 
 void loop() {
-  // Read centre median temperature
+  // Read centre median temperature (register 0x22-0x23)
   Wire.beginTransmission(PICO_ADDR);
-  Wire.write(0x22);  // CENTRE_MEDIAN register
+  Wire.write(0x22);  // CENTRE_MEDIAN_L register
   Wire.endTransmission();
 
+  // Request 2 bytes (little-endian signed int16)
   Wire.requestFrom(PICO_ADDR, 2);
-  int16_t temp_tenths = Wire.read() | (Wire.read() << 8);
-  float temp_celsius = temp_tenths / 10.0;
+  if (Wire.available() >= 2) {
+    uint8_t low_byte = Wire.read();
+    uint8_t high_byte = Wire.read();
+    // Combine bytes (little-endian) and handle sign
+    int16_t temp_tenths = (int16_t)((high_byte << 8) | low_byte);
+    float temp_celsius = temp_tenths / 10.0;
 
-  Serial.print("Centre: ");
-  Serial.print(temp_celsius);
-  Serial.println(" °C");
+    Serial.print("Centre: ");
+    Serial.print(temp_celsius);
+    Serial.println(" °C");
+  }
 
   delay(100);
 }
@@ -286,8 +303,13 @@ void loop() {
 
 1. **Auto-increment:** Register pointer auto-increments on sequential reads
 2. **Little-endian:** All multi-byte values are little-endian (LSB first)
-3. **Temperature format:** All temps as int16 tenths (divide by 10 for °C)
-4. **Frame access:** Reading from 0x41 streams full frame with auto-increment
+   - Read LOW byte first, then HIGH byte
+   - Combine as: `value = (high << 8) | low`
+   - Python: `struct.unpack('<h', bytes([low, high]))[0]`
+3. **Temperature format:** All temps as **signed** int16 tenths (divide by 10 for °C)
+   - Range: -3276.8°C to +3276.7°C
+   - Negative temperatures are properly supported
+4. **Frame access:** Reading from 0x51 streams full frame with auto-increment
 5. **Non-blocking:** I2C slave uses interrupts, doesn't block main loop
 
 ## Troubleshooting
