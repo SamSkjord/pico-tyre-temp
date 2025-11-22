@@ -10,6 +10,7 @@
 #include "pico/stdlib.h"
 #include "pico/time.h"
 #include "hardware/i2c.h"
+#include "hardware/watchdog.h"
 
 // MLX90640 library (use official Melexis library)
 // Note: You'll need to download MLX90640_API.c and MLX90640_API.h from:
@@ -53,6 +54,7 @@
 #define TIMING_PRINT_INTERVAL 10  // Print timing stats every N frames
 #define MIN_FRAME_TIME_MS 80.0f  // Theoretical minimum frame time
 #define MIN_FRAME_TIME_THRESHOLD_MS 100.0f  // Threshold for "running too fast" warning
+#define WATCHDOG_TIMEOUT_MS 5000  // Watchdog timeout - reboot if no update in 5 seconds
 
 // Frame counter (volatile for potential ISR access in future)
 static volatile uint32_t total_frames = 0;
@@ -164,6 +166,14 @@ int main(void) {
     printf("Output: %s\n", COMPACT_OUTPUT ? "Compact CSV" : "Full JSON");
     printf("I2C Slave: 0x08 (GP26=SDA, GP27=SCL)\n");
     printf("========================================\n\n");
+
+    // Enable watchdog timer to recover from hangs (e.g., I2C bus lockup)
+    // If watchdog_update() is not called within timeout, Pico will reboot
+    if (watchdog_caused_reboot()) {
+        printf("WARNING: Rebooted by watchdog - previous hang detected\n");
+    }
+    watchdog_enable(WATCHDOG_TIMEOUT_MS, 1);  // Enable with pause_on_debug=1
+    printf("Watchdog enabled (timeout: %d ms)\n", WATCHDOG_TIMEOUT_MS);
 
     gpio_put(LED_PIN, 0);  // LED off - ready
 
@@ -278,6 +288,10 @@ int main(void) {
 
         // Blink LED on every frame
         gpio_put(LED_PIN, total_frames % 2);
+
+        // Pet the watchdog - we're still alive and processing frames
+        // If this doesn't get called within WATCHDOG_TIMEOUT_MS, Pico reboots
+        watchdog_update();
 
         // Small delay for first few frames to let USB stabilize
         if (total_frames <= USB_STABILIZE_FRAMES) {
