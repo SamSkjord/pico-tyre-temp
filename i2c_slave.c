@@ -198,27 +198,22 @@ void i2c_slave_update(const FrameData *data, float fps, const float *frame) {
     if (!data) return;  // Validate data pointer
     if (!frame) return;  // Validate frame pointer
 
-    // CRITICAL SECTION: Disable interrupts for atomic frame pointer update AND register updates
-    // This ensures ISR doesn't read partially updated state or stale frame pointer
-    uint32_t irq_state = save_and_disable_interrupts();
+    // PRE-CALCULATE all values BEFORE disabling interrupts
+    // This minimises the critical section duration to prevent I2C NACKs
 
-    // Store frame pointer (must be done with interrupts disabled for true atomicity)
-    current_frame = frame;
-
-    // Update status registers
-    register_map[REG_FRAME_NUMBER_L] = data->frame_number & 0xFF;
-    register_map[REG_FRAME_NUMBER_H] = (data->frame_number >> 8) & 0xFF;
-    register_map[REG_FPS] = (uint8_t)fminf(fps, 255.0f);  // Clamp to uint8 range
-    register_map[REG_DETECTED] = data->detection.detected ? 1 : 0;
-    // Clamp confidence to 0-100% range before scaling to avoid overflow
+    // Status register values
+    uint8_t frame_num_l = data->frame_number & 0xFF;
+    uint8_t frame_num_h = (data->frame_number >> 8) & 0xFF;
+    uint8_t fps_val = (uint8_t)fminf(fps, 255.0f);
+    uint8_t detected = data->detection.detected ? 1 : 0;
     float confidence_clamped = fmaxf(0.0f, fminf(data->detection.confidence, 1.0f));
-    register_map[REG_CONFIDENCE] = (uint8_t)(confidence_clamped * 100.0f);
-    register_map[REG_TYRE_WIDTH] = data->detection.tyre_width;
-    register_map[REG_SPAN_START] = data->detection.span_start;
-    register_map[REG_SPAN_END] = data->detection.span_end;
-    register_map[REG_WARNINGS] = data->warnings;
+    uint8_t confidence = (uint8_t)(confidence_clamped * 100.0f);
+    uint8_t tyre_width = data->detection.tyre_width;
+    uint8_t span_start = data->detection.span_start;
+    uint8_t span_end = data->detection.span_end;
+    uint8_t warnings = data->warnings;
 
-    // Update temperature data (as int16 tenths of degrees)
+    // Temperature data (as int16 tenths of degrees)
     int16_t left_med = temp_to_int16_tenths(data->left.median);
     int16_t centre_med = temp_to_int16_tenths(data->centre.median);
     int16_t right_med = temp_to_int16_tenths(data->right.median);
@@ -227,16 +222,54 @@ void i2c_slave_update(const FrameData *data, float fps, const float *frame) {
     int16_t right_avg = temp_to_int16_tenths(data->right.avg);
     int16_t lat_grad = temp_to_int16_tenths(data->lateral_gradient);
 
-    // Check fallback mode - if no tyre detected and fallback enabled, copy centre temps
-    if (!data->detection.detected && register_map[REG_FALLBACK_MODE] == 1) {
+    // Check fallback mode - read register outside critical section
+    uint8_t fallback_mode = register_map[REG_FALLBACK_MODE];
+    if (!data->detection.detected && fallback_mode == 1) {
         left_med = centre_med;
         right_med = centre_med;
         left_avg = centre_avg;
         right_avg = centre_avg;
-        lat_grad = 0;  // No gradient when copying centre temp
+        lat_grad = 0;
     }
 
-    // Pack into registers (little-endian)
+    // Pre-calculate 16 raw channel values
+    int16_t raw_channels[16];
+    if (frame) {
+        for (int ch = 0; ch < 16; ch++) {
+            float sum = 0.0f;
+            int col_start = ch * CHANNEL_COL_COUNT;
+
+            for (int row = CHANNEL_ROW_START; row < CHANNEL_ROW_END; row++) {
+                for (int col = col_start; col < col_start + CHANNEL_COL_COUNT; col++) {
+                    int idx = row * 32 + col;
+                    if (idx >= 0 && idx < 768) {
+                        sum += frame[idx];
+                    }
+                }
+            }
+
+            raw_channels[ch] = temp_to_int16_tenths(sum / (float)CHANNEL_PIXEL_COUNT);
+        }
+    }
+
+    // MINIMAL CRITICAL SECTION: Only fast register writes with interrupts disabled
+    // This keeps the I2C slave responsive (critical section < 10µs)
+    uint32_t irq_state = save_and_disable_interrupts();
+
+    // Store frame pointer atomically
+    current_frame = frame;
+
+    // Fast register writes (no float ops, no loops with computation)
+    register_map[REG_FRAME_NUMBER_L] = frame_num_l;
+    register_map[REG_FRAME_NUMBER_H] = frame_num_h;
+    register_map[REG_FPS] = fps_val;
+    register_map[REG_DETECTED] = detected;
+    register_map[REG_CONFIDENCE] = confidence;
+    register_map[REG_TYRE_WIDTH] = tyre_width;
+    register_map[REG_SPAN_START] = span_start;
+    register_map[REG_SPAN_END] = span_end;
+    register_map[REG_WARNINGS] = warnings;
+
     register_map[REG_LEFT_MEDIAN_L] = left_med & 0xFF;
     register_map[REG_LEFT_MEDIAN_H] = (left_med >> 8) & 0xFF;
     register_map[REG_CENTRE_MEDIAN_L] = centre_med & 0xFF;
@@ -254,37 +287,18 @@ void i2c_slave_update(const FrameData *data, float fps, const float *frame) {
     register_map[REG_LATERAL_GRADIENT_L] = lat_grad & 0xFF;
     register_map[REG_LATERAL_GRADIENT_H] = (lat_grad >> 8) & 0xFF;
 
-    // Calculate 16 raw channels if frame data is available
-    // Each channel averages 2 columns × 4 middle rows = 8 pixels
+    // Fast copy of pre-calculated raw channels
     if (frame) {
         for (int ch = 0; ch < 16; ch++) {
-            float sum = 0.0f;
-            int col_start = ch * CHANNEL_COL_COUNT;
-
-            // Average 2 columns × 4 middle rows
-            for (int row = CHANNEL_ROW_START; row < CHANNEL_ROW_END; row++) {
-                for (int col = col_start; col < col_start + CHANNEL_COL_COUNT; col++) {
-                    // Bounds check to prevent buffer overflow
-                    int idx = row * 32 + col;
-                    if (idx >= 0 && idx < 768) {
-                        sum += frame[idx];
-                    }
-                }
-            }
-
-            float avg = sum / (float)CHANNEL_PIXEL_COUNT;
-            int16_t temp = temp_to_int16_tenths(avg);
-
-            // Pack into registers at 0x30 + (ch * 2) with bounds validation
             uint8_t reg_base = REG_RAW_CH0_L + (ch * 2);
-            if (reg_base + 1 < I2C_REGISTER_MAP_SIZE) {  // Ensure we don't overflow register map
-                register_map[reg_base] = temp & 0xFF;
-                register_map[reg_base + 1] = (temp >> 8) & 0xFF;
+            if (reg_base + 1 < I2C_REGISTER_MAP_SIZE) {
+                register_map[reg_base] = raw_channels[ch] & 0xFF;
+                register_map[reg_base + 1] = (raw_channels[ch] >> 8) & 0xFF;
             }
         }
     }
 
-    // END CRITICAL SECTION: Re-enable interrupts
+    // END CRITICAL SECTION
     restore_interrupts(irq_state);
 }
 
