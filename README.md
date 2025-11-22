@@ -337,6 +337,23 @@ Edit `main.c`:
 
 Current C version achieves **11.5 Hz** - exceeding the original 4-10 Hz goal!
 
+## Version History
+
+### v1.1 (2025-11-22) - I2C Reliability
+
+- **Minimal critical section** - Pre-calculate all values before disabling interrupts, reducing interrupt-disabled time from ~100µs to <10µs. Prevents I2C NACKs when master polls during updates.
+- **Watchdog timer** - 5-second watchdog auto-reboots if main loop hangs (e.g., sensor read stuck). Logs warning on boot if previous hang detected.
+- **I2C thread safety** - Register updates are now atomic and non-blocking for the I2C slave ISR.
+
+### v1.0 (2025-11-20) - Initial C Release
+
+- 11.5 Hz frame rate (7.6x faster than CircuitPython)
+- I2C slave mode on GP26/GP27 at address 0x08
+- 16-channel raw temperature profile
+- Automatic tyre detection algorithm
+- USB serial output (CSV/JSON)
+- Emissivity configuration via I2C register
+
 ## License
 
 MIT License - same as main thermal-tyre-driver package.

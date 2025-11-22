@@ -407,3 +407,23 @@ bus.write_byte_data(PICO_ADDR, 0x01, 0x01)  # OUTPUT_MODE_I2C_SLAVE
 - Typical I2C read latency: <1ms
 - Register updates: <0.1ms per frame
 - Supports 100kHz and 400kHz I2C bus speeds
+
+### I2C Reliability (v1.1+)
+
+**Minimal Critical Section:**
+- All float operations and channel averaging are pre-calculated before disabling interrupts
+- Critical section (interrupts disabled) reduced from ~100µs to <10µs
+- This prevents I2C NACKs when the master polls during register updates
+- If the master reads during an update, the slave can always respond promptly
+
+**Watchdog Timer:**
+- 5-second watchdog timer enabled - auto-reboots if main loop hangs
+- Protects against I2C bus lockups caused by sensor read failures
+- Logs "WARNING: Rebooted by watchdog" on startup if previous hang detected
+- Watchdog is paused during debug sessions (pause_on_debug=1)
+
+**Best Practices for Masters:**
+- Use short I2C timeouts (100-500ms) to detect unresponsive slaves
+- Implement retry logic with exponential backoff
+- If using I2C mux (TCA9548A), select channel before each transaction
+- Avoid polling faster than the Pico's frame rate (~10 Hz)
