@@ -21,9 +21,33 @@ if ! command -v cmake &> /dev/null; then
     exit 1
 fi
 
+# On macOS, check for and set PICO_TOOLCHAIN_PATH if needed
+if [[ "$OSTYPE" == "darwin"* ]]; then
+    if [ -z "$PICO_TOOLCHAIN_PATH" ]; then
+        # Try to find ARM GCC toolchain
+        if [ -d "/Applications/ArmGNUToolchain/13.3.rel1/arm-none-eabi" ]; then
+            export PICO_TOOLCHAIN_PATH="/Applications/ArmGNUToolchain/13.3.rel1/arm-none-eabi"
+            echo "Using ARM GCC toolchain: $PICO_TOOLCHAIN_PATH"
+        elif [ -d "/Applications/ArmGNUToolchain/14.3.rel1/arm-none-eabi" ]; then
+            export PICO_TOOLCHAIN_PATH="/Applications/ArmGNUToolchain/14.3.rel1/arm-none-eabi"
+            echo "Using ARM GCC toolchain: $PICO_TOOLCHAIN_PATH"
+        else
+            echo "ERROR: ARM GCC toolchain not found!"
+            echo "Download from: https://developer.arm.com/downloads/-/arm-gnu-toolchain-downloads"
+            echo "Install the .pkg file, then run this script again"
+            exit 1
+        fi
+    fi
+fi
+
+# Check if arm-none-eabi-gcc is available
 if ! command -v arm-none-eabi-gcc &> /dev/null; then
-    echo "ERROR: ARM GCC toolchain not found!"
-    echo "Install with: brew install --cask gcc-arm-embedded"
+    echo "ERROR: arm-none-eabi-gcc not found in PATH!"
+    if [[ "$OSTYPE" == "darwin"* ]]; then
+        echo "Download from: https://developer.arm.com/downloads/-/arm-gnu-toolchain-downloads"
+    else
+        echo "Install with: sudo apt install gcc-arm-none-eabi"
+    fi
     exit 1
 fi
 

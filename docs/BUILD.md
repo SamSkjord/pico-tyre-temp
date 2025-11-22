@@ -27,9 +27,20 @@ export PICO_SDK_PATH=~/pico-sdk
 
 **macOS:**
 ```bash
+# Install CMake
 brew install cmake
-brew install --cask gcc-arm-embedded
+
+# Download and install ARM GCC toolchain
+# Get the latest from: https://developer.arm.com/downloads/-/arm-gnu-toolchain-downloads
+# Look for "arm-none-eabi" for macOS (Darwin) - currently version 13.3.rel1
+# Install the .pkg file to /Applications/ArmGNUToolchain/
+
+# Set environment variables (add to ~/.zshrc or ~/.bashrc)
+export PICO_SDK_PATH=~/pico-sdk
+export PICO_TOOLCHAIN_PATH=/Applications/ArmGNUToolchain/13.3.rel1/arm-none-eabi
 ```
+
+**Note**: The `brew install --cask gcc-arm-embedded` does NOT work correctly with CMake for Pico builds. You must download and install the official ARM toolchain from the link above.
 
 **Linux:**
 ```bash
@@ -56,10 +67,30 @@ This downloads the official Melexis MLX90640 C library.
 
 ### Quick Build
 
+**macOS:**
 ```bash
 cd c_version
 mkdir build
 cd build
+
+# Set environment variables for this build
+export PICO_SDK_PATH=~/pico-sdk
+export PICO_TOOLCHAIN_PATH=/Applications/ArmGNUToolchain/13.3.rel1/arm-none-eabi
+
+# Configure and build
+cmake ..
+make -j4
+```
+
+**Linux/Windows:**
+```bash
+cd c_version
+mkdir build
+cd build
+
+# Only PICO_SDK_PATH needed (ARM GCC should be in PATH)
+export PICO_SDK_PATH=~/pico-sdk
+
 cmake ..
 make -j4
 ```
@@ -144,6 +175,24 @@ Run the download script:
 ### "arm-none-eabi-gcc not found"
 Install ARM GCC toolchain (see Prerequisites above).
 
+**On macOS**: Make sure you set `PICO_TOOLCHAIN_PATH` before running cmake:
+```bash
+export PICO_TOOLCHAIN_PATH=/Applications/ArmGNUToolchain/13.3.rel1/arm-none-eabi
+```
+
+### Build fails with "unknown directive .syntax unified" or "unknown CPU name"
+This means CMake is using the wrong compiler (Apple Clang instead of ARM GCC).
+
+**Solution**: Set the toolchain path before running cmake:
+```bash
+cd build
+rm -rf *  # Clean build directory
+export PICO_SDK_PATH=~/pico-sdk
+export PICO_TOOLCHAIN_PATH=/Applications/ArmGNUToolchain/13.3.rel1/arm-none-eabi
+cmake ..
+make -j4
+```
+
 ### Serial output garbled
 Check baud rate is 115200.
 
@@ -168,14 +217,29 @@ MLX90640 SCL → Pico GP1 (Pin 2)
 ```bash
 cd build
 make -j4
-# Copy new .uf2 to Pico
+# Copy new .uf2 to Pico (hold BOOTSEL and reconnect USB)
+cp thermal_tyre_pico.uf2 /Volumes/RPI-RP2/
 ```
+
+**Note**: If you've made CMakeLists.txt changes, do a clean build instead.
 
 ### Clean Build
 
+**macOS:**
 ```bash
 cd build
 rm -rf *
+export PICO_SDK_PATH=~/pico-sdk
+export PICO_TOOLCHAIN_PATH=/Applications/ArmGNUToolchain/13.3.rel1/arm-none-eabi
+cmake ..
+make -j4
+```
+
+**Linux/Windows:**
+```bash
+cd build
+rm -rf *
+export PICO_SDK_PATH=~/pico-sdk
 cmake ..
 make -j4
 ```
