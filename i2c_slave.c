@@ -330,3 +330,56 @@ float i2c_slave_get_emissivity(void) {
 bool i2c_slave_get_raw_mode(void) {
     return (register_map[REG_RAW_MODE] != 0);
 }
+
+void i2c_slave_update_laser(uint32_t distance_mm, uint32_t distance_um,
+                            uint8_t error_code, uint16_t valid_count,
+                            uint16_t error_count, bool enabled) {
+    if (!state.enabled) return;
+
+    // Determine status: 0=no data, 1=valid, 2+=error
+    uint8_t status;
+    if (!enabled) {
+        status = 0;
+    } else if (error_code == 0 && distance_mm > 0) {
+        status = 1;  // Valid reading
+    } else {
+        status = 2 + error_code;  // Error (offset by 2 to distinguish from no data)
+    }
+
+    // MINIMAL CRITICAL SECTION for laser register writes
+    uint32_t irq_state = save_and_disable_interrupts();
+
+    register_map[REG_LASER_STATUS] = status;
+
+    // Distance in mm (uint32, little-endian)
+    register_map[REG_LASER_DIST_MM_0] = distance_mm & 0xFF;
+    register_map[REG_LASER_DIST_MM_1] = (distance_mm >> 8) & 0xFF;
+    register_map[REG_LASER_DIST_MM_2] = (distance_mm >> 16) & 0xFF;
+    register_map[REG_LASER_DIST_MM_3] = (distance_mm >> 24) & 0xFF;
+
+    // Distance in um (uint32, little-endian)
+    register_map[REG_LASER_DIST_UM_0] = distance_um & 0xFF;
+    register_map[REG_LASER_DIST_UM_1] = (distance_um >> 8) & 0xFF;
+    register_map[REG_LASER_DIST_UM_2] = (distance_um >> 16) & 0xFF;
+    register_map[REG_LASER_DIST_UM_3] = (distance_um >> 24) & 0xFF;
+
+    register_map[REG_LASER_ERROR] = error_code;
+
+    // Counters (uint16, little-endian)
+    register_map[REG_LASER_VALID_CNT_L] = valid_count & 0xFF;
+    register_map[REG_LASER_VALID_CNT_H] = (valid_count >> 8) & 0xFF;
+    register_map[REG_LASER_ERROR_CNT_L] = error_count & 0xFF;
+    register_map[REG_LASER_ERROR_CNT_H] = (error_count >> 8) & 0xFF;
+
+    register_map[REG_LASER_ENABLED] = enabled ? 1 : 0;
+
+    restore_interrupts(irq_state);
+}
+
+bool i2c_slave_get_laser_enable(void) {
+    return (register_map[REG_LASER_ENABLE] != 0);
+}
+
+void i2c_slave_set_laser_enable(bool enabled) {
+    register_map[REG_LASER_ENABLE] = enabled ? 1 : 0;
+}
