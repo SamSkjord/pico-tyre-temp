@@ -35,7 +35,7 @@ cd build && rm -rf * && cmake .. && make -j4
 ### Peripheral Bus Design
 - **I2C0 (GP0/GP1)**: Master mode - communicates with MLX90640 thermal sensor at address 0x33
 - **I2C1 (GP26/GP27)**: Slave mode - exposes thermal and laser data to external controllers at address 0x08
-- **UART1 (GP4/GP5)**: Laser ranger (DFRobot SEN0366) at 9600 baud
+- **UART1 (GP8/GP9)**: Laser ranger (DFRobot SEN0366) at 9600 baud
 
 ### Core Modules
 
@@ -91,7 +91,7 @@ cd build && rm -rf * && cmake .. && make -j4
 
 - **MLX90640** at 0x33 on I2C0 (GP0=SDA, GP1=SCL) - 4.7kΩ pull-ups required
 - **I2C slave** at 0x08 on I2C1 (GP26=SDA, GP27=SCL) for external controllers
-- **UART1 (GP4/GP5)**: Laser ranger (DFRobot SEN0366) at 9600 baud - auto-detected at boot
+- **UART1 (GP8/GP9)**: Laser ranger (DFRobot SEN0366) at 9600 baud - auto-detected at boot
 - Thermal sensor runs at 16Hz refresh rate, 1MHz I2C speed
 - Laser runs in continuous mode (~3-20Hz depending on configuration)
 

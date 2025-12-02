@@ -159,8 +159,8 @@ int main(void) {
     i2c_slave_init(I2C_SLAVE_DEFAULT_ADDR);
     printf("I2C slave mode enabled on GP26/GP27\n");
 
-    // Initialize laser ranger (UART1: GP4=TX, GP5=RX)
-    printf("Initializing laser ranger on UART1 (GP4/GP5)...\n");
+    // Initialize laser ranger (UART1: GP8=TX, GP9=RX)
+    printf("Initializing laser ranger on UART1 (GP8/GP9)...\n");
     laser_ranger_init();
 
     // Detect if laser is present and enable if found
@@ -295,6 +295,10 @@ int main(void) {
         if (i2c_slave_output_enabled(OUTPUT_MODE_USB_SERIAL)) {
             #if COMPACT_OUTPUT
                 send_serial_compact(&result, fps);
+                // Print laser distance if enabled
+                if (laser->enabled && laser->has_valid_reading) {
+                    printf("  Laser: %lu mm\n", laser->distance_mm);
+                }
             #else
                 send_serial_json(&result, fps, temp_profile);
             #endif

@@ -14,9 +14,10 @@
 #include <stdlib.h>
 
 // UART configuration
+// Using GP8/GP9 to avoid conflict with I2C pins
 #define LASER_UART uart1
-#define LASER_UART_TX_PIN 4   // GP4 (Pico TX -> Laser RX)
-#define LASER_UART_RX_PIN 5   // GP5 (Pico RX <- Laser TX)
+#define LASER_UART_TX_PIN 8   // GP8 (Pico TX -> Laser RX)
+#define LASER_UART_RX_PIN 9   // GP9 (Pico RX <- Laser TX)
 #define LASER_BAUD 9600
 
 // Recovery timing
@@ -146,6 +147,9 @@ static void init_uart_hardware(void) {
     gpio_set_function(LASER_UART_TX_PIN, GPIO_FUNC_UART);
     gpio_set_function(LASER_UART_RX_PIN, GPIO_FUNC_UART);
 
+    // Pull-down on RX to prevent floating input noise when no laser connected
+    gpio_pull_down(LASER_UART_RX_PIN);
+
     // Configure UART: 8N1
     uart_set_format(LASER_UART, 8, 1, UART_PARITY_NONE);
     uart_set_fifo_enabled(LASER_UART, true);
@@ -155,8 +159,8 @@ static void init_uart_hardware(void) {
 
 // Internal function to clear UART buffers
 static void clear_buffers(void) {
-    // Clear hardware FIFO
-    while (uart_is_readable(LASER_UART)) {
+    // Clear hardware FIFO (limit iterations to prevent infinite loop on floating RX)
+    for (int i = 0; i < 256 && uart_is_readable(LASER_UART); i++) {
         uart_getc(LASER_UART);
     }
     // Clear software ring buffer

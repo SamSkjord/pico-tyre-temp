@@ -3,7 +3,7 @@
  * Serial laser distance measurement module driver
  *
  * Interfaces with DFRobot SEN0366 / generic infrared laser ranging modules.
- * Uses UART1 on GP4 (TX) / GP5 (RX) at 9600 baud.
+ * Uses UART1 on GP8 (TX) / GP9 (RX) at 9600 baud.
  *
  * Protocol: 9600 baud, 8N1, device address 0x80
  * Frame format: ADDR(1) + CMD(1) + STATUS(1) + DATA(7) + CS(1) = 11 bytes
@@ -64,7 +64,7 @@ typedef struct {
 } LaserState;
 
 /**
- * Initialize laser ranger on UART1 (GP4=TX, GP5=RX)
+ * Initialize laser ranger on UART1 (GP8=TX, GP9=RX)
  * Does NOT start measurement - call laser_ranger_set_enabled(true) to start.
  */
 void laser_ranger_init(void);
