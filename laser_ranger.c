@@ -15,9 +15,12 @@
 
 // UART configuration
 #define LASER_UART uart1
-#define LASER_UART_TX_PIN 4   // GP4
-#define LASER_UART_RX_PIN 5   // GP5
+#define LASER_UART_TX_PIN 4   // GP4 (Pico TX -> Laser RX)
+#define LASER_UART_RX_PIN 5   // GP5 (Pico RX <- Laser TX)
 #define LASER_BAUD 9600
+
+// Recovery timing
+#define RECOVERY_DELAY_MS 50
 
 // Ring buffer for incoming data
 #define LASER_BUFFER_SIZE 64
@@ -185,18 +188,27 @@ bool laser_ranger_detect(void) {
     uint8_t cmd[] = {LASER_ADDR, 0x06, 0x05, 0x00};
     send_command(cmd, sizeof(cmd));
 
-    // Wait for response (up to 500ms)
+    // Wait for valid response (up to 500ms)
+    // Must see the address byte (0x80) to confirm it's the laser, not noise
     uint32_t start = to_ms_since_boot(get_absolute_time());
+    bool seen_addr = false;
+
     while ((to_ms_since_boot(get_absolute_time()) - start) < 500) {
-        if (uart_is_readable(LASER_UART)) {
-            // Got some response - laser is present
+        while (uart_is_readable(LASER_UART)) {
+            uint8_t byte = uart_getc(LASER_UART);
+            if (byte == LASER_ADDR) {
+                // Valid address byte - laser is present
+                seen_addr = true;
+            }
+        }
+        if (seen_addr) {
             clear_buffers();
             return true;
         }
         sleep_ms(10);
     }
 
-    // No response - laser not present
+    // No valid response - laser not present
     return false;
 }
 
@@ -205,23 +217,35 @@ bool laser_ranger_poll(void) {
 
     uint32_t now_ms = to_ms_since_boot(get_absolute_time());
 
+    // Non-blocking recovery state machine
+    if (state.recovery_state != RECOVERY_IDLE) {
+        if ((now_ms - state.recovery_ms) >= RECOVERY_DELAY_MS) {
+            if (state.recovery_state == RECOVERY_LASER_OFF_PENDING) {
+                laser_ranger_laser_off();
+                state.recovery_state = RECOVERY_START_CONTINUOUS_PENDING;
+                state.recovery_ms = now_ms;
+            } else if (state.recovery_state == RECOVERY_START_CONTINUOUS_PENDING) {
+                laser_ranger_start_continuous();
+                state.recovery_state = RECOVERY_IDLE;
+                state.last_valid_ms = now_ms;  // Reset timeout
+            }
+        }
+        return false;  // Still recovering, don't process data
+    }
+
     // Check for timeout - if no valid data for LASER_TIMEOUT_MS, try recovery
-    if (state.has_valid_reading &&
-        (now_ms - state.last_valid_ms) > LASER_TIMEOUT_MS) {
-        // Timeout detected - attempt recovery
+    // Check both: time since last valid reading, OR time since enabled (if never got data)
+    uint32_t time_ref = state.has_valid_reading ? state.last_valid_ms : state.enabled_ms;
+    if ((now_ms - time_ref) > LASER_TIMEOUT_MS) {
+        // Timeout detected - start non-blocking recovery
         state.last_error = LASER_ERR_TIMEOUT;
         state.error_count++;
         state.recovery_count++;
 
-        // Clear buffers and restart continuous mode
+        // Start recovery state machine
         clear_buffers();
-        sleep_ms(50);
-        laser_ranger_laser_off();
-        sleep_ms(50);
-        laser_ranger_start_continuous();
-
-        // Reset timeout timer
-        state.last_valid_ms = now_ms;
+        state.recovery_state = RECOVERY_LASER_OFF_PENDING;
+        state.recovery_ms = now_ms;
         return false;
     }
 
@@ -293,16 +317,19 @@ uint32_t laser_ranger_get_distance_um(void) {
 }
 
 void laser_ranger_laser_on(void) {
+    if (!state.initialized) return;
     uint8_t cmd[] = {LASER_ADDR, 0x06, 0x05, 0x01};
     send_command(cmd, sizeof(cmd));
 }
 
 void laser_ranger_laser_off(void) {
+    if (!state.initialized) return;
     uint8_t cmd[] = {LASER_ADDR, 0x06, 0x05, 0x00};
     send_command(cmd, sizeof(cmd));
 }
 
 void laser_ranger_start_continuous(void) {
+    if (!state.initialized) return;
     uint8_t cmd[] = {LASER_ADDR, 0x06, 0x03};
     send_command(cmd, sizeof(cmd));
 }
@@ -319,16 +346,21 @@ bool laser_ranger_is_active(void) {
 void laser_ranger_set_enabled(bool enable) {
     if (enable == state.enabled) return;
 
+    uint32_t now_ms = to_ms_since_boot(get_absolute_time());
+
     if (enable) {
         // Enable laser
         state.enabled = true;
-        state.last_valid_ms = to_ms_since_boot(get_absolute_time());
+        state.enabled_ms = now_ms;
+        state.last_valid_ms = now_ms;
+        state.recovery_state = RECOVERY_IDLE;
         clear_buffers();
         laser_ranger_start_continuous();
     } else {
         // Disable laser
         laser_ranger_laser_off();
         state.enabled = false;
+        state.recovery_state = RECOVERY_IDLE;
     }
 }
 

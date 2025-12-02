@@ -39,6 +39,13 @@ typedef enum {
 // Timeout for recovery (restart continuous mode if no data)
 #define LASER_TIMEOUT_MS 3000
 
+// Recovery state machine
+typedef enum {
+    RECOVERY_IDLE = 0,
+    RECOVERY_LASER_OFF_PENDING,
+    RECOVERY_START_CONTINUOUS_PENDING
+} RecoveryState;
+
 // Laser state
 typedef struct {
     uint32_t distance_um;    // Last valid distance in micrometers (0.001mm precision)
@@ -47,7 +54,10 @@ typedef struct {
     uint32_t valid_count;    // Number of valid measurements
     uint32_t error_count;    // Number of errors
     uint32_t last_valid_ms;  // Timestamp of last valid reading (for timeout detection)
+    uint32_t enabled_ms;     // Timestamp when laser was enabled (for initial timeout)
     uint32_t recovery_count; // Number of recovery attempts
+    uint32_t recovery_ms;    // Timestamp for recovery state machine
+    RecoveryState recovery_state;  // Non-blocking recovery state
     bool enabled;            // Laser enabled flag (software enable)
     bool initialized;        // Hardware initialized flag
     bool has_valid_reading;  // At least one valid reading received
