@@ -134,11 +134,12 @@ Auto-increments through frame data with each read. Wraps to start after reading 
 | 0xFF | Timeout (triggers auto-recovery) |
 
 **Auto-Detection & Recovery:**
-- Laser is auto-detected at boot (500ms timeout)
+- Laser is auto-detected at boot (500ms timeout, validates 0x80 address byte)
 - If detected, enable register (0x06) is set to 1
 - If not detected, enable register is set to 0
-- If laser stops responding for 3 seconds, auto-recovery is attempted
-- Recovery restarts continuous measurement mode
+- If laser stops responding for 3 seconds, non-blocking recovery is attempted
+- Recovery uses state machine (no blocking delays in main loop)
+- Recovery also triggers if laser never responds after being enabled
 
 ### Command Register (0xFF) - Write Only
 

@@ -45,7 +45,7 @@ cd build && rm -rf * && cmake .. && make -j4
 | `thermal_algorithm.c/h` | Tyre detection: extracts middle rows, region growing, zone statistics (left/centre/right) |
 | `i2c_slave.c/h` | I2C slave implementation with 256-byte register map |
 | `communication.c/h` | USB serial output (CSV/JSON formats) |
-| `laser_ranger.c/h` | Serial laser distance sensor driver (non-blocking, continuous mode) |
+| `laser_ranger.c/h` | Serial laser distance sensor driver (non-blocking, auto-detect, recovery) |
 | `mlx90640/` | Melexis driver library (downloaded via script) |
 
 ### I2C Slave Register Map
