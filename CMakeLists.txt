@@ -31,7 +31,6 @@ add_executable(thermal_tyre_pico
     thermal_algorithm.c
     communication.c
     i2c_slave.c
-    laser_ranger.c
 )
 
 target_link_libraries(thermal_tyre_pico
@@ -39,7 +38,6 @@ target_link_libraries(thermal_tyre_pico
     pico_stdlib
     hardware_i2c
     hardware_irq
-    hardware_uart
     hardware_sync
     pico_multicore
 )

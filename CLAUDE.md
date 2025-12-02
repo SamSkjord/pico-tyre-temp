@@ -34,8 +34,7 @@ cd build && rm -rf * && cmake .. && make -j4
 
 ### Peripheral Bus Design
 - **I2C0 (GP0/GP1)**: Master mode - communicates with MLX90640 thermal sensor at address 0x33
-- **I2C1 (GP26/GP27)**: Slave mode - exposes thermal and laser data to external controllers at address 0x08
-- **UART1 (GP8/GP9)**: Laser ranger (DFRobot SEN0366) at 9600 baud
+- **I2C1 (GP26/GP27)**: Slave mode - exposes thermal data to external controllers at address 0x08
 
 ### Core Modules
 
@@ -45,7 +44,6 @@ cd build && rm -rf * && cmake .. && make -j4
 | `thermal_algorithm.c/h` | Tyre detection: extracts middle rows, region growing, zone statistics (left/centre/right) |
 | `i2c_slave.c/h` | I2C slave implementation with 256-byte register map |
 | `communication.c/h` | USB serial output (CSV/JSON formats) |
-| `laser_ranger.c/h` | Serial laser distance sensor driver (non-blocking, auto-detect, recovery) |
 | `mlx90640/` | Melexis driver library (downloaded via script) |
 
 ### I2C Slave Register Map
@@ -55,7 +53,6 @@ cd build && rm -rf * && cmake .. && make -j4
 - **0x20-0x2D**: Zone temperatures (left/centre/right median/avg as int16 tenths)
 - **0x30-0x4F**: Raw 16-channel thermal data (when RAW_MODE=1)
 - **0x50-0x51**: Full 768-pixel frame access
-- **0x60-0x6F**: Laser ranger data (distance mm/um, status, error code)
 
 ### Data Flow
 
@@ -63,9 +60,7 @@ cd build && rm -rf * && cmake .. && make -j4
 2. `MLX90640_CalculateTo()` converts to temperatures (~20ms)
 3. `thermal_algorithm_process()` detects tyre and calculates zones (~2ms)
 4. `i2c_slave_update()` updates thermal registers atomically (<1ms)
-5. `laser_ranger_poll()` parses any available laser frames (non-blocking)
-6. `i2c_slave_update_laser()` updates laser registers
-7. `send_serial_compact/json()` outputs to USB (~3ms)
+5. `send_serial_compact/json()` outputs to USB (~3ms)
 
 ### Thread Safety
 
@@ -91,9 +86,7 @@ cd build && rm -rf * && cmake .. && make -j4
 
 - **MLX90640** at 0x33 on I2C0 (GP0=SDA, GP1=SCL) - 4.7kΩ pull-ups required
 - **I2C slave** at 0x08 on I2C1 (GP26=SDA, GP27=SCL) for external controllers
-- **UART1 (GP8/GP9)**: Laser ranger (DFRobot SEN0366) at 9600 baud - auto-detected at boot
 - Thermal sensor runs at 16Hz refresh rate, 1MHz I2C speed
-- Laser runs in continuous mode (~3-20Hz depending on configuration)
 
 ## Tests
 

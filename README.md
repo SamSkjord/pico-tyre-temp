@@ -102,7 +102,6 @@ Output: Compact CSV
 - ✅ **Safe**: NaN/Inf protection on all float outputs
 - ✅ **Visualizer**: Real-time matplotlib visualization included
 - ✅ **Flexible**: CSV and JSON output formats
-- ✅ **Laser Ranger**: Optional TOF laser distance sensor (auto-detected, with recovery)
 
 ## Output Formats
 
@@ -143,7 +142,6 @@ Change `COMPACT_OUTPUT` in `main.c` to switch formats.
 - Raspberry Pi Pico or Pico W
 - MLX90640 thermal camera
 - I2C pull-ups (4.7kΩ)
-- Optional: DFRobot SEN0366 laser ranger (or compatible)
 
 ### Wiring
 
@@ -154,13 +152,6 @@ VDD          →      3V3 (Pin 36)
 GND          →      GND (Pin 38)
 SDA          →      GP0 (Pin 1)
 SCL          →      GP1 (Pin 2)
-
-Laser Ranger (UART1)    Pico
---------------------    ----
-VCC          →          3V3 (Pin 36)
-GND          →          GND (Pin 38)
-TX           →          GP9 (Pin 12) - Laser TX to Pico RX
-RX           →          GP8 (Pin 11) - Laser RX to Pico TX
 
 I2C Slave (I2C1)    Pico
 ----------------    ----
@@ -195,7 +186,6 @@ pico-tyre-temp/
 ├── thermal_algorithm.c/h       # Tyre detection algorithm
 ├── communication.c/h           # Serial + I2C output
 ├── i2c_slave.c/h              # I2C slave mode implementation
-├── laser_ranger.c/h           # Laser distance sensor driver
 │
 ├── docs/                       # Documentation
 │   ├── BUILD.md               # Detailed build instructions
@@ -344,7 +334,6 @@ Edit `main.c`:
 ## Future Improvements
 
 - [x] I2C peripheral/slave mode (implemented on GP26/GP27 at address 0x08)
-- [x] Laser ranger support (DFRobot SEN0366 on UART1 GP8/GP9)
 - [ ] Multi-core processing (sensor on core 0, algorithm on core 1)
 - [ ] Optimize `MLX90640_CalculateTo()` - the 61.5ms bottleneck
 - [ ] Fixed-point math or SIMD for temperature calculations

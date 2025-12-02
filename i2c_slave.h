@@ -40,7 +40,7 @@ typedef enum {
 #define REG_FALLBACK_MODE       0x03  // Fallback mode: 0=zero temps when no tyre, 1=copy centre temp
 #define REG_EMISSIVITY          0x04  // Emissivity × 100 (e.g., 95 = 0.95), default 95
 #define REG_RAW_MODE            0x05  // Raw mode: 0=tyre algorithm, 1=16-channel raw data
-#define REG_LASER_ENABLE        0x06  // Laser enable: 0=disabled, 1=enabled (auto-detected at boot)
+#define REG_RESERVED_06         0x06
 #define REG_RESERVED_07         0x07
 #define REG_RESERVED_08         0x08
 #define REG_RESERVED_09         0x09
@@ -99,24 +99,6 @@ typedef enum {
 #define REG_FRAME_ACCESS        0x50  // Read pointer for full frame data (reserved, not implemented)
 #define REG_FRAME_DATA_START    0x51  // Start of streaming frame data
 
-// LASER RANGER DATA (0x60-0x6F) - Read Only
-#define REG_LASER_STATUS        0x60  // Laser status: 0=no data, 1=valid, 2+=error code
-#define REG_LASER_DIST_MM_0     0x61  // Distance in mm (uint32, little-endian, byte 0 = LSB)
-#define REG_LASER_DIST_MM_1     0x62  // Distance in mm (byte 1)
-#define REG_LASER_DIST_MM_2     0x63  // Distance in mm (byte 2)
-#define REG_LASER_DIST_MM_3     0x64  // Distance in mm (byte 3 = MSB)
-#define REG_LASER_DIST_UM_0     0x65  // Distance in um (uint32, little-endian, byte 0)
-#define REG_LASER_DIST_UM_1     0x66  // Distance in um (byte 1)
-#define REG_LASER_DIST_UM_2     0x67  // Distance in um (byte 2)
-#define REG_LASER_DIST_UM_3     0x68  // Distance in um (byte 3)
-#define REG_LASER_ERROR         0x69  // Last error code (0=OK)
-#define REG_LASER_VALID_CNT_L   0x6A  // Valid measurement count (uint16, low byte)
-#define REG_LASER_VALID_CNT_H   0x6B  // Valid measurement count (high byte)
-#define REG_LASER_ERROR_CNT_L   0x6C  // Error count (uint16, low byte)
-#define REG_LASER_ERROR_CNT_H   0x6D  // Error count (high byte)
-#define REG_LASER_ENABLED       0x6E  // Laser enabled flag (read-only status)
-#define REG_LASER_RESERVED      0x6F  // Reserved
-
 // Special commands
 #define REG_CMD                 0xFF  // Command register
 #define CMD_RESET               0x01  // Software reset
@@ -153,16 +135,5 @@ float i2c_slave_get_emissivity(void);
 
 // Get raw mode setting
 bool i2c_slave_get_raw_mode(void);
-
-// Update I2C slave registers with laser ranger data
-void i2c_slave_update_laser(uint32_t distance_mm, uint32_t distance_um,
-                            uint8_t error_code, uint16_t valid_count,
-                            uint16_t error_count, bool enabled);
-
-// Get laser enable setting from I2C register
-bool i2c_slave_get_laser_enable(void);
-
-// Set laser enable register (called after detection)
-void i2c_slave_set_laser_enable(bool enabled);
 
 #endif // PICO_TYRE_I2C_SLAVE_H

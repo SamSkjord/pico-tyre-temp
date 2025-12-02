@@ -44,8 +44,7 @@ The Pico supports multiple output modes (configurable via register `0x01`):
 | `0x03` | FALLBACK_MODE | uint8 | Fallback mode: 0=zero temps when no tyre, 1=copy centre temp |
 | `0x04` | EMISSIVITY | uint8 | Emissivity × 100 (e.g., 95 = 0.95), default 95 |
 | `0x05` | RAW_MODE | uint8 | Raw mode: 0=tyre algorithm, 1=16-channel raw data only |
-| `0x06` | LASER_ENABLE | uint8 | Laser enable: 0=disabled, 1=enabled (auto-set at boot) |
-| `0x07-0x0F` | RESERVED | - | Reserved for future use |
+| `0x06-0x0F` | RESERVED | - | Reserved for future use |
 
 ### Status Registers (0x10-0x1F) - Read Only
 
@@ -105,41 +104,6 @@ Available when `RAW_MODE=1`. Each channel averages 2 columns × 4 middle rows (r
 
 Reading from `0x51` returns full 768-pixel frame as **signed int16 tenths** (1536 bytes total: 768 pixels × 2 bytes).
 Auto-increments through frame data with each read. Wraps to start after reading all 1536 bytes.
-
-### Laser Ranger Data (0x60-0x6F) - Read Only
-
-| Address | Name | Type | Description |
-|---------|------|------|-------------|
-| `0x60` | LASER_STATUS | uint8 | 0=no data, 1=valid reading, 2+=error (error code + 2) |
-| `0x61-0x64` | LASER_DIST_MM | uint32 | Distance in millimeters (little-endian) |
-| `0x65-0x68` | LASER_DIST_UM | uint32 | Distance in micrometers (little-endian, 0.001mm precision) |
-| `0x69` | LASER_ERROR | uint8 | Last error code (0=OK, see error codes below) |
-| `0x6A-0x6B` | LASER_VALID_CNT | uint16 | Count of valid measurements (little-endian) |
-| `0x6C-0x6D` | LASER_ERROR_CNT | uint16 | Count of errors (little-endian) |
-| `0x6E` | LASER_ENABLED | uint8 | Laser enabled flag (1=enabled) |
-| `0x6F` | RESERVED | - | Reserved |
-
-**Laser Error Codes:**
-| Code | Meaning |
-|------|---------|
-| 0x00 | OK - No error |
-| 0x01 | No data yet |
-| 0x14 | Calculation error |
-| 0x15 | Laser low power |
-| 0x18 | Weak signal or measurement too long |
-| 0x1E | Low power |
-| 0x20 | Strong ambient light |
-| 0x74 | Out of range |
-| 0xFE | Parse error |
-| 0xFF | Timeout (triggers auto-recovery) |
-
-**Auto-Detection & Recovery:**
-- Laser is auto-detected at boot (500ms timeout, validates 0x80 address byte)
-- If detected, enable register (0x06) is set to 1
-- If not detected, enable register is set to 0
-- If laser stops responding for 3 seconds, non-blocking recovery is attempted
-- Recovery uses state machine (no blocking delays in main loop)
-- Recovery also triggers if laser never responds after being enabled
 
 ### Command Register (0xFF) - Write Only
 
@@ -298,70 +262,6 @@ for i, temp in enumerate(channels):
 # Disable raw mode - return to tyre algorithm
 bus.write_byte_data(PICO_ADDR, 0x05, 0x00)  # RAW_MODE = 0
 ```
-
-### Example 9: Read Laser Distance
-
-```python
-import struct
-
-# Read laser status first
-status = bus.read_byte_data(PICO_ADDR, 0x60)
-
-if status == 0:
-    print("Laser: No data yet")
-elif status == 1:
-    # Valid reading - read distance in mm (4 bytes at 0x61-0x64)
-    data = bus.read_i2c_block_data(PICO_ADDR, 0x61, 4)
-    distance_mm = struct.unpack('<I', bytes(data))[0]
-
-    # Or read distance in um for higher precision (4 bytes at 0x65-0x68)
-    data = bus.read_i2c_block_data(PICO_ADDR, 0x65, 4)
-    distance_um = struct.unpack('<I', bytes(data))[0]
-
-    print(f"Laser distance: {distance_mm} mm ({distance_um/1000:.3f} mm)")
-else:
-    # Error - status is error_code + 2
-    error_code = status - 2
-    print(f"Laser error: 0x{error_code:02X}")
-```
-
-### Example 10: Monitor Laser Health
-
-```python
-import struct
-
-# Read laser counters
-data = bus.read_i2c_block_data(PICO_ADDR, 0x6A, 4)
-valid_count, error_count = struct.unpack('<HH', bytes(data))
-
-enabled = bus.read_byte_data(PICO_ADDR, 0x6E)
-last_error = bus.read_byte_data(PICO_ADDR, 0x69)
-
-print(f"Laser enabled: {enabled}")
-print(f"Valid readings: {valid_count}")
-print(f"Error count: {error_count}")
-print(f"Last error: 0x{last_error:02X}")
-
-if valid_count + error_count > 0:
-    success_rate = valid_count / (valid_count + error_count) * 100
-    print(f"Success rate: {success_rate:.1f}%")
-```
-
-### Example 11: Enable/Disable Laser
-
-```python
-# Check if laser was detected at boot
-laser_enabled = bus.read_byte_data(PICO_ADDR, 0x06)
-print(f"Laser enabled: {laser_enabled}")
-
-# Disable laser (e.g., to save power)
-bus.write_byte_data(PICO_ADDR, 0x06, 0x00)
-
-# Re-enable laser
-bus.write_byte_data(PICO_ADDR, 0x06, 0x01)
-```
-
-**Note:** The laser is auto-detected at boot. If no laser is connected, the enable register (0x06) is set to 0. You can enable it later if a laser is connected, but the Pico won't detect it automatically after boot.
 
 ## Arduino Example
 

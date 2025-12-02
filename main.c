@@ -21,7 +21,6 @@
 #include "thermal_algorithm.h"
 #include "communication.h"
 #include "i2c_slave.h"
-#include "laser_ranger.h"
 
 #define MLX90640_ADDR 0x33
 #define COMPACT_OUTPUT 1  // 1 for CSV, 0 for JSON
@@ -159,21 +158,6 @@ int main(void) {
     i2c_slave_init(I2C_SLAVE_DEFAULT_ADDR);
     printf("I2C slave mode enabled on GP26/GP27\n");
 
-    // Initialize laser ranger (UART1: GP8=TX, GP9=RX)
-    printf("Initializing laser ranger on UART1 (GP8/GP9)...\n");
-    laser_ranger_init();
-
-    // Detect if laser is present and enable if found
-    bool laser_present = laser_ranger_detect();
-    if (laser_present) {
-        printf("Laser ranger detected - enabling\n");
-        laser_ranger_set_enabled(true);
-        i2c_slave_set_laser_enable(true);
-    } else {
-        printf("Laser ranger not detected - disabled\n");
-        i2c_slave_set_laser_enable(false);
-    }
-
     FrameData result;
     memset(&result, 0, sizeof(result));
 
@@ -271,34 +255,10 @@ int main(void) {
         // Update I2C slave registers
         i2c_slave_update(&result, fps, mlx_frame);
 
-        // Check if laser enable state changed via I2C register
-        bool laser_should_enable = i2c_slave_get_laser_enable();
-        if (laser_should_enable != laser_ranger_is_enabled()) {
-            laser_ranger_set_enabled(laser_should_enable);
-        }
-
-        // Poll laser ranger for new measurements (non-blocking)
-        laser_ranger_poll();
-
-        // Update I2C slave with laser data
-        const LaserState *laser = laser_ranger_get_state();
-        i2c_slave_update_laser(
-            laser->distance_mm,
-            laser->distance_um,
-            (uint8_t)laser->last_error,
-            (uint16_t)(laser->valid_count & 0xFFFF),
-            (uint16_t)(laser->error_count & 0xFFFF),
-            laser->enabled
-        );
-
         // Output results (conditional based on output mode)
         if (i2c_slave_output_enabled(OUTPUT_MODE_USB_SERIAL)) {
             #if COMPACT_OUTPUT
                 send_serial_compact(&result, fps);
-                // Print laser distance if enabled
-                if (laser->enabled && laser->has_valid_reading) {
-                    printf("  Laser: %lu mm\n", laser->distance_mm);
-                }
             #else
                 send_serial_json(&result, fps, temp_profile);
             #endif
